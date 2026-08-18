@@ -3,7 +3,10 @@
 //! Everything lives here so upstream merges stay cheap. The rest of the tree is
 //! touched in exactly two places. both marked with "fork" sentinel comments:
 //! 1. helix-term/src/lib.rs            -- `pub mod welcome;`.
-//! 2. helix-term/src/application.rs    -- push the layer at startup.
+//! 2. helix-term/src/application.rs    -- `welcome::layer()` at startup.
+//!
+//! `layer` is the only entry point, so growing this feature never widens that
+//! footprint. See FORK.md at the repository root.
 
 use helix_core::{unicode::width::UnicodeWidthStr, Position};
 use helix_view::{
@@ -15,6 +18,10 @@ use helix_view::{
 };
 use tui::buffer::Buffer as Surface;
 
+mod config;
+
+pub use config::Config;
+
 use crate::{
     args::Args,
     compositor::{Component, Compositor, Context, Event, EventResult},
@@ -25,8 +32,8 @@ use crate::{
 use std::io::{stdin, IsTerminal};
 use std::path::PathBuf;
 
-/// Drawn above the menu. Lines are centered individually, so they don't have to
-/// be the same length — swap this for whatever art you like.
+/// Drawn above the menu unless `welcome.toml` overrides it. Lines are centered
+/// individually, so they don't have to be the same length.
 const BANNER: &[&str] = &[
     "██╗  ██╗███████╗██╗     ██╗██╗  ██╗",
     "██║  ██║██╔════╝██║     ██║╚██╗██╔╝",
@@ -166,23 +173,48 @@ fn workspace_root(cx: &mut Context) -> Option<PathBuf> {
     Some(root)
 }
 
-pub fn should_show(args: &Args) -> bool {
-    !cfg!(feature = "integration")
+/// The welcome screen layer for this invocation, if there should be one.
+///
+/// Only a bare `hx` qualifies: files on the command line, `--tutor`, or piped
+/// stdin all mean the user already said what they want to look at. Integration
+/// tests drive the compositor directly, so keep the layer out of their way too.
+pub fn layer(args: &Args) -> Option<Box<dyn Component>> {
+    let wanted = !cfg!(feature = "integration")
         && args.files.is_empty()
         && !args.load_tutor
-        && stdin().is_terminal()
+        && stdin().is_terminal();
+
+    if !wanted {
+        return None;
+    }
+
+    let config = Config::load();
+    if !config.enable {
+        return None;
+    }
+
+    Some(Box::new(Welcome::new(config)))
 }
 
-#[derive(Default)]
 pub struct Welcome {
     selected: usize,
+    banner: Vec<String>,
+    footer: String,
 }
 
 impl Welcome {
     pub const ID: &'static str = "welcome";
 
-    pub fn new() -> Self {
-        Self::default()
+    fn new(config: Config) -> Self {
+        Self {
+            selected: 0,
+            banner: config
+                .banner
+                .unwrap_or_else(|| BANNER.iter().map(|line| line.to_string()).collect()),
+            footer: config
+                .footer
+                .unwrap_or_else(|| format!("helix {}", helix_loader::VERSION_AND_GIT_HASH)),
+        }
     }
 
     /// Runs `action`, removing the layer first unless the action wants to be
@@ -254,20 +286,27 @@ impl Component for Welcome {
         let selected_style = theme.get("ui.text.focus").add_modifier(Modifier::BOLD);
         let footer_style = theme.get("comment");
 
-        let footer = format!("helix {}", helix_loader::VERSION_AND_GIT_HASH);
-        let banner_width = BANNER.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
-        let footer_width = footer.width() as u16;
+        let banner_width = self
+            .banner
+            .iter()
+            .map(|line| line.width())
+            .max()
+            .unwrap_or(0) as u16;
+        let footer_width = self.footer.width() as u16;
         let menu_width = Self::width();
 
         // Shed decoration rather than overflow a small terminal: the banner goes
         // first, then the footer. The menu is the point, so it always renders.
         let mut height = ITEMS.len() as u16;
-        let show_banner =
-            area.width >= banner_width && area.height >= height + BANNER.len() as u16 + GAP;
+        let show_banner = !self.banner.is_empty()
+            && area.width >= banner_width
+            && area.height >= height + self.banner.len() as u16 + GAP;
         if show_banner {
-            height += BANNER.len() as u16 + GAP;
+            height += self.banner.len() as u16 + GAP;
         }
-        let show_footer = area.width >= footer_width && area.height >= height + GAP + FOOTER_HEIGHT;
+        let show_footer = !self.footer.is_empty()
+            && area.width >= footer_width
+            && area.height >= height + GAP + FOOTER_HEIGHT;
         if show_footer {
             height += GAP + FOOTER_HEIGHT;
         }
@@ -276,7 +315,7 @@ impl Component for Welcome {
         let mut y = area.y + area.height.saturating_sub(height) / 2;
 
         if show_banner {
-            for line in BANNER {
+            for line in &self.banner {
                 surface.set_stringn(
                     center(line.width() as u16),
                     y,
@@ -313,7 +352,7 @@ impl Component for Welcome {
             surface.set_stringn(
                 center(footer_width),
                 y,
-                &footer,
+                &self.footer,
                 area.width as usize,
                 footer_style,
             );

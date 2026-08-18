@@ -142,8 +142,8 @@ impl Application {
         let jobs = Jobs::new();
 
         // ====== fork: welcome screen (begin) ======
-        if crate::welcome::should_show(&args) {
-            compositor.push(Box::new(crate::welcome::Welcome::new()))
+        if let Some(layer) = crate::welcome::layer(&args) {
+            compositor.push(layer);
         }
         // ====== fork: welcome screen (end) ======
 
