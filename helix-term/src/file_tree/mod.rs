@@ -543,7 +543,7 @@ impl Component for FileTree {
             shift!('G') => self.tree.select_last(),
             key!(PageDown) | ctrl!('d') => self.tree.select_by(self.page()),
             key!(PageUp) | ctrl!('u') => self.tree.select_by(-self.page()),
-            key!('l') | key!(Enter) | key!(Right) => return self.activate(cx),
+            key!('o') | key!('l') | key!(Enter) | key!(Right) => return self.activate(cx),
             key!('h') | key!(Left) => self.collapse_or_leave(),
             key!('a') => self.ask(Pending::CreateFile, cx.editor),
             shift!('A') => self.ask(Pending::CreateDirectory, cx.editor),
