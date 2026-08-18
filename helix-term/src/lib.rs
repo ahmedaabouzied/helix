@@ -6,7 +6,9 @@ pub mod args;
 pub mod commands;
 pub mod compositor;
 pub mod config;
+// fork: see file_tree/mod.rs
 pub mod events;
+pub mod file_tree;
 pub mod health;
 pub mod job;
 pub mod keymap;
