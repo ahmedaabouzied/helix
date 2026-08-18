@@ -13,6 +13,9 @@ pub mod keymap;
 pub mod logging;
 pub mod ui;
 
+// fork: welcome screen
+pub mod welcome;
+
 #[cfg(not(windows))]
 use std::env::var_os;
 

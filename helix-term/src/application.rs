@@ -141,6 +141,12 @@ impl Application {
 
         let jobs = Jobs::new();
 
+        // ====== fork: welcome screen (begin) ======
+        if crate::welcome::should_show(&args) {
+            compositor.push(Box::new(crate::welcome::Welcome::new()))
+        }
+        // ====== fork: welcome screen (end) ======
+
         if args.load_tutor {
             let path = helix_loader::runtime_file(Path::new("tutor"));
             editor.open(&path, Action::VerticalSplit)?;
