@@ -5,9 +5,9 @@
 //! 1. helix-term/src/lib.rs            -- `pub mod welcome;`.
 //! 2. helix-term/src/application.rs    -- push the layer at startup.
 
-use helix_core::Position;
+use helix_core::{unicode::width::UnicodeWidthStr, Position};
 use helix_view::{
-    graphics::{CursorKind, Rect},
+    graphics::{CursorKind, Modifier, Rect},
     Editor,
 };
 use tui::buffer::Buffer as Surface;
@@ -15,9 +15,63 @@ use tui::buffer::Buffer as Surface;
 use crate::{
     args::Args,
     compositor::{Component, Context, Event, EventResult},
+    ctrl, key,
 };
 
 use std::io::{stdin, IsTerminal};
+
+/// Drawn above the menu. Lines are centered individually, so they don't have to
+/// be the same length — swap this for whatever art you like.
+const BANNER: &[&str] = &[
+    "██╗  ██╗███████╗██╗     ██╗██╗  ██╗",
+    "██║  ██║██╔════╝██║     ██║╚██╗██╔╝",
+    "███████║█████╗  ██║     ██║ ╚███╔╝ ",
+    "██╔══██║██╔══╝  ██║     ██║ ██╔██╗ ",
+    "██║  ██║███████╗███████╗██║██╔╝ ██╗",
+    "╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝",
+];
+
+const ITEMS: &[Item] = &[
+    Item {
+        key: 'f',
+        label: "Find file",
+    },
+    Item {
+        key: 'e',
+        label: "File explorer",
+    },
+    Item {
+        key: 'n',
+        label: "New file",
+    },
+    Item {
+        key: 'c',
+        label: "Open config",
+    },
+    Item {
+        key: 't',
+        label: "Tutor",
+    },
+    Item {
+        key: 'q',
+        label: "Quit",
+    },
+];
+
+/// Marker on the selected row, two columns wide including the trailing space.
+const MARKER: &str = "▸ ";
+/// Columns from the left edge of the menu to the label: marker (2), hotkey (1),
+/// gap (2).
+const LABEL_OFFSET: u16 = 5;
+/// Blank rows between banner, menu and footer.
+const GAP: u16 = 2;
+/// Rows taken by the footer.
+const FOOTER_HEIGHT: u16 = 1;
+
+struct Item {
+    key: char,
+    label: &'static str,
+}
 
 pub fn should_show(args: &Args) -> bool {
     !cfg!(feature = "integration")
@@ -27,36 +81,133 @@ pub fn should_show(args: &Args) -> bool {
 }
 
 #[derive(Default)]
-pub struct Welcome;
+pub struct Welcome {
+    selected: usize,
+}
 
 impl Welcome {
     pub const ID: &'static str = "welcome";
+
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    fn width() -> u16 {
+        let label = ITEMS
+            .iter()
+            .map(|item| item.label.width())
+            .max()
+            .unwrap_or(0) as u16;
+        LABEL_OFFSET + label
     }
 }
 
 impl Component for Welcome {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
-        // Leave the bottom row alone so the status line sill shows through
-        let area = area.clip_bottom(1);
+        let theme = &cx.editor.theme;
 
-        let text = "welcome";
-        let x = area.x + area.width.saturating_sub(text.len() as u16) / 2;
-        let y = area.y + area.height / 2;
-        surface.set_string(x, y, text, cx.editor.theme.get("ui.text"));
+        // Leave the bottom row alone so the statusline still shows through.
+        let area = area.clip_bottom(1);
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        surface.clear_with(area, theme.get("ui.background"));
+
+        let banner_style = theme.get("keyword");
+        let key_style = theme.get("constant");
+        let text_style = theme.get("ui.text");
+        // Bold as well as coloured: `ui.text.focus` falls back to `ui.text` in
+        // themes that don't define it, which would leave the selection invisible.
+        let selected_style = theme.get("ui.text.focus").add_modifier(Modifier::BOLD);
+        let footer_style = theme.get("comment");
+
+        let footer = format!("helix {}", helix_loader::VERSION_AND_GIT_HASH);
+        let banner_width = BANNER.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
+        let footer_width = footer.width() as u16;
+        let menu_width = Self::width();
+
+        // Shed decoration rather than overflow a small terminal: the banner goes
+        // first, then the footer. The menu is the point, so it always renders.
+        let mut height = ITEMS.len() as u16;
+        let show_banner =
+            area.width >= banner_width && area.height >= height + BANNER.len() as u16 + GAP;
+        if show_banner {
+            height += BANNER.len() as u16 + GAP;
+        }
+        let show_footer = area.width >= footer_width && area.height >= height + GAP + FOOTER_HEIGHT;
+        if show_footer {
+            height += GAP + FOOTER_HEIGHT;
+        }
+
+        let center = |width: u16| area.x + area.width.saturating_sub(width) / 2;
+        let mut y = area.y + area.height.saturating_sub(height) / 2;
+
+        if show_banner {
+            for line in BANNER {
+                surface.set_stringn(
+                    center(line.width() as u16),
+                    y,
+                    line,
+                    area.width as usize,
+                    banner_style,
+                );
+                y += 1;
+            }
+            y += GAP;
+        }
+
+        let x = center(menu_width);
+        for (i, item) in ITEMS.iter().enumerate() {
+            let selected = i == self.selected;
+            let label_style = if selected { selected_style } else { text_style };
+            let marker = if selected { MARKER } else { "  " };
+            let mut buf = [0; 4];
+
+            surface.set_stringn(x, y, marker, 2, label_style);
+            surface.set_stringn(x + 2, y, item.key.encode_utf8(&mut buf), 1, key_style);
+            surface.set_stringn(
+                x + LABEL_OFFSET,
+                y,
+                item.label,
+                item.label.width(),
+                label_style,
+            );
+            y += 1;
+        }
+
+        if show_footer {
+            y += GAP;
+            surface.set_stringn(
+                center(footer_width),
+                y,
+                &footer,
+                area.width as usize,
+                footer_style,
+            );
+        }
     }
 
     fn handle_event(&mut self, event: &Event, _cx: &mut Context) -> EventResult {
-        if !matches!(event, Event::Key(_)) {
+        let Event::Key(key) = event else {
             return EventResult::Ignored(None);
-        }
+        };
 
-        // `Ignored` with a callback is the popup auto-close pattern: the key
-        // still reaches the editor underneath, and we get removed afterwards.
-        EventResult::Ignored(Some(Box::new(|compositor, _| {
-            compositor.remove(Welcome::ID);
-        })))
+        match *key {
+            key!('j') | key!(Down) | ctrl!('n') => {
+                self.selected = (self.selected + 1) % ITEMS.len();
+                EventResult::Consumed(None)
+            }
+            key!('k') | key!(Up) | ctrl!('p') => {
+                self.selected = self.selected.checked_sub(1).unwrap_or(ITEMS.len() - 1);
+                EventResult::Consumed(None)
+            }
+            // Anything else dismisses and falls through to the editor, so typing
+            // straight into the scratch buffer just works. `Ignored` with a
+            // callback is the same auto-close trick `ui/popup.rs` uses.
+            _ => EventResult::Ignored(Some(Box::new(|compositor, _| {
+                compositor.remove(Welcome::ID);
+            }))),
+        }
     }
 
     /// The compositor walks layers front-to-back and stops at the first `Some`.
