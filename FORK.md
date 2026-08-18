@@ -123,15 +123,27 @@ cursor from the list. `MIN_WIDTH` in the fork module duplicates the value of
 ### File tree
 
 `:file-tree` (aliased `:tree`) opens a modal file tree over the editor, in the
-manner of a picker. Bind it with `"C-n" = ":file-tree"` under `[keys.normal]`;
-no default binding is added, which is what keeps `keymap/default.rs` untouched.
+manner of a picker.
+
+No default binding ships with it, which is what keeps `keymap/default.rs`
+untouched. Bind it in `config.toml` instead — user keymaps merge into the
+built-in ones node by node, so this extends the space menu rather than
+replacing it:
+
+```toml
+[keys.normal.space]
+t = ":file-tree"
+```
+
+`o` and `l` both open, the first for NERDTree muscle memory and the second to
+pair with `h` for walking in and out, as ranger and lf do.
 
 | key | |
 | --- | --- |
 | `j` `k` `↓` `↑` `C-n` `C-p` | move, wrapping |
 | `g` `G` | first row, last row |
 | `C-d` `C-u` `PageUp` `PageDown` | half a page, stopping at the ends |
-| `l` `Enter` `→` | expand or collapse a directory, open a file |
+| `o` `l` `Enter` `→` | expand or collapse a directory, open a file |
 | `h` `←` | collapse, or step out to the parent |
 | `a` `A` | create file, create directory |
 | `r` | rename |
