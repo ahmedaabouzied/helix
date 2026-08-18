@@ -57,7 +57,36 @@ banner = ["  my own", "  ascii art"]  # omit for the built-in art, [] to hide
 footer = "carpe diem"                 # omit for `helix <version>`, "" to hide
 ```
 
-The menu itself is Rust, in `ITEMS` and `Action::run`.
+The menu itself is Rust, in `ITEMS` and `Action::run`. The banner in
+`welcome.toml` must have every line padded to the same width — the screen
+centers each line independently, so ragged lines scatter the art.
+
+### Binary name
+
+The fork installs as `dhx` — Double Helix — so it never collides with an `hx`
+already on PATH and needs no alias to coexist with one.
+
+| File | Change |
+| --- | --- |
+| `helix-term/Cargo.toml` | `default-run` and `[[bin]] name` are `dhx` |
+| `helix-term/src/main.rs` | the `USAGE:` line printed by `--help` |
+
+Install:
+
+```sh
+HELIX_DEFAULT_RUNTIME="$PWD/runtime" cargo install --path helix-term --locked
+```
+
+The env var is read with `option_env!`, so the path is compiled into the binary.
+That part is not optional: outside `cargo run` there is no `CARGO_MANIFEST_DIR`,
+so the loader only checks `~/.config/helix/runtime` and the directory beside the
+executable — an installed `dhx` would otherwise start with no grammars, no
+themes and no tutor.
+
+Do not symlink `~/.config/helix/runtime` at the repo instead. That path outranks
+the baked one *and* is shared with every other Helix on the machine, so an older
+`hx` would pick up this fork's grammars and fail to load them across the
+tree-sitter ABI gap.
 
 ## Merging upstream
 
