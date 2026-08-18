@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use helix_core::{command_line::Args, Position};
 use helix_view::{
     editor::Action,
+    fork::icons,
     graphics::{CursorKind, Rect},
     Editor,
 };
@@ -35,6 +36,10 @@ use model::Tree;
 const INDENT: usize = 2;
 /// Width of the open/shut marker in front of every row, blank for files.
 const MARKER_WIDTH: usize = 2;
+/// Width of the icon column: one glyph and the space after it. Nerd Font
+/// glyphs measure as one cell; a terminal that renders them double-width needs
+/// this at 3.
+const ICON_WIDTH: usize = 2;
 
 pub struct FileTree {
     tree: Tree,
@@ -471,12 +476,28 @@ impl Component for FileTree {
                 style = selected_style;
             }
 
+            let icon = if entry.is_dir {
+                icons::for_directory(entry.expanded)
+            } else {
+                icons::for_file(&entry.path)
+            };
+
             surface.set_stringn(x, y, marker, width, style);
+            // Only the foreground is overridden, so a selected row keeps its
+            // highlight behind the glyph — and the glyph keeps its own colour,
+            // the way nvim-tree leaves icons coloured under the cursor.
             surface.set_stringn(
                 x + MARKER_WIDTH as u16,
                 y,
+                icon.glyph,
+                ICON_WIDTH,
+                style.fg(icon.color),
+            );
+            surface.set_stringn(
+                x + (MARKER_WIDTH + ICON_WIDTH) as u16,
+                y,
                 &name,
-                width.saturating_sub(MARKER_WIDTH),
+                width.saturating_sub(MARKER_WIDTH + ICON_WIDTH),
                 style,
             );
         }
