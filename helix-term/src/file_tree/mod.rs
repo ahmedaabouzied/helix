@@ -55,10 +55,13 @@ pub struct FileTree {
 }
 
 /// What the open prompt is collecting a name for.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Pending {
     CreateFile,
     CreateDirectory,
+    /// Renaming the entry at this path, which is remembered because the
+    /// selection may have moved by the time the name is submitted.
+    Rename(PathBuf),
 }
 
 impl FileTree {
@@ -86,16 +89,28 @@ impl FileTree {
     }
 
     /// Starts collecting a name for `pending`.
-    fn ask(&mut self, pending: Pending) {
-        let label = match pending {
-            Pending::CreateFile => "create file: ",
-            Pending::CreateDirectory => "create directory: ",
+    fn ask(&mut self, pending: Pending, editor: &Editor) {
+        let (label, line) = match &pending {
+            Pending::CreateFile => ("create file: ", String::new()),
+            Pending::CreateDirectory => ("create directory: ", String::new()),
+            // Pre-filled so a rename is an edit of the current name rather than
+            // typing it out again.
+            Pending::Rename(path) => ("rename to: ", file_name(path)),
         };
 
-        self.prompt = Some((
-            pending,
-            Prompt::new(label.into(), None, completers::none, |_, _, _| {}),
-        ));
+        let mut prompt = Prompt::new(label.into(), None, completers::none, |_, _, _| {});
+        if !line.is_empty() {
+            prompt.set_line(line, editor);
+        }
+
+        self.prompt = Some((pending, prompt));
+    }
+
+    /// Opens a rename prompt for the selected row.
+    fn ask_rename(&mut self, editor: &Editor) {
+        if let Some(entry) = self.tree.selected_entry() {
+            self.ask(Pending::Rename(entry.path.clone()), editor);
+        }
     }
 
     /// While a prompt is open it owns the keyboard, so the tree's own bindings
@@ -110,7 +125,11 @@ impl FileTree {
                 if let Some((pending, prompt)) = self.prompt.take() {
                     let name = prompt.line().trim().to_string();
                     if !name.is_empty() {
-                        self.create(&name, pending, cx);
+                        match pending {
+                            Pending::CreateFile => self.create(&name, false, cx),
+                            Pending::CreateDirectory => self.create(&name, true, cx),
+                            Pending::Rename(from) => self.rename(&from, &name, cx),
+                        }
                     }
                 }
             }
@@ -128,34 +147,36 @@ impl FileTree {
     /// The directory new entries land in, and the row to re-read afterwards.
     /// `None` means the root, which has no row of its own.
     fn target_directory(&self) -> (PathBuf, Option<usize>) {
-        let root = || (self.tree.root().to_path_buf(), None);
+        let index = self.tree.selected();
 
-        let Some(entry) = self.tree.selected_entry() else {
-            return root();
-        };
-
-        if entry.is_dir {
-            return (entry.path.clone(), Some(self.tree.selected()));
-        }
-
-        match self.tree.parent_of(self.tree.selected()) {
-            Some(index) => (self.tree.get(index).unwrap().path.clone(), Some(index)),
-            None => root(),
+        match self.tree.selected_entry() {
+            Some(entry) if entry.is_dir => (entry.path.clone(), Some(index)),
+            Some(_) => self.containing_directory(index),
+            None => (self.tree.root().to_path_buf(), None),
         }
     }
 
-    fn create(&mut self, name: &str, pending: Pending, cx: &mut Context) {
+    /// The directory the row at `index` lives in, and the row to re-read after
+    /// changing it. `None` means the root, which has no row of its own.
+    fn containing_directory(&self, index: usize) -> (PathBuf, Option<usize>) {
+        match self.tree.parent_of(index) {
+            Some(parent) => (self.tree.get(parent).unwrap().path.clone(), Some(parent)),
+            None => (self.tree.root().to_path_buf(), None),
+        }
+    }
+
+    fn create(&mut self, name: &str, directory_wanted: bool, cx: &mut Context) {
         let (directory, index) = self.target_directory();
         let path = directory.join(name);
 
         // A name may carry directories of its own — `ui/menu.rs` creates `ui`
         // on the way. `create_new` then refuses to clobber an existing file.
-        let created = match pending {
-            Pending::CreateDirectory => std::fs::create_dir_all(&path),
-            Pending::CreateFile => path
-                .parent()
+        let created = if directory_wanted {
+            std::fs::create_dir_all(&path)
+        } else {
+            path.parent()
                 .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::File::create_new(&path).map(|_| ())),
+                .and_then(|()| std::fs::File::create_new(&path).map(|_| ()))
         };
 
         if let Err(err) = created {
@@ -167,6 +188,50 @@ impl FileTree {
         self.refresh(index, &directory, cx);
 
         if let Some(index) = self.tree.position(&path) {
+            self.tree.select(index);
+        }
+    }
+
+    /// Renames the entry at `from`, which may also move it: a name containing
+    /// separators is joined onto the containing directory.
+    ///
+    /// Goes through `Editor::move_path` rather than `fs::rename` so that open
+    /// buffers follow the file and language servers get `willRename` — which is
+    /// what lets a server fix up imports across the workspace.
+    fn rename(&mut self, from: &Path, name: &str, cx: &mut Context) {
+        let Some(parent) = from.parent() else {
+            cx.editor.set_error("Cannot rename the filesystem root");
+            return;
+        };
+
+        let to = parent.join(name);
+        if to == from {
+            return;
+        }
+        if to.exists() {
+            cx.editor
+                .set_error(format!("{} already exists", to.display()));
+            return;
+        }
+
+        if let Err(err) = cx.editor.move_path(from, &to) {
+            cx.editor
+                .set_error(format!("Failed to rename {}: {err}", from.display()));
+            return;
+        }
+
+        // Re-read from the row the entry lived under, which is unchanged: a
+        // rename cannot move something out of its own directory unless the new
+        // name says so, and that case re-reads the same parent anyway.
+        let index = self
+            .tree
+            .position(from)
+            .map(|index| self.containing_directory(index))
+            .unwrap_or_else(|| self.target_directory());
+
+        self.refresh(index.1, &index.0, cx);
+
+        if let Some(index) = self.tree.position(&to) {
             self.tree.select(index);
         }
     }
@@ -364,8 +429,9 @@ impl Component for FileTree {
             key!(PageUp) | ctrl!('u') => self.tree.select_by(-self.page()),
             key!('l') | key!(Enter) | key!(Right) => return self.activate(cx),
             key!('h') | key!(Left) => self.collapse_or_leave(),
-            key!('a') => self.ask(Pending::CreateFile),
-            shift!('A') => self.ask(Pending::CreateDirectory),
+            key!('a') => self.ask(Pending::CreateFile, cx.editor),
+            shift!('A') => self.ask(Pending::CreateDirectory, cx.editor),
+            key!('r') => self.ask_rename(cx.editor),
             // Modal: swallow everything else rather than let it reach the
             // buffer underneath.
             _ => {}
@@ -388,6 +454,14 @@ impl Component for FileTree {
     fn id(&self) -> Option<&'static str> {
         Some(Self::ID)
     }
+}
+
+/// The final component of a path, for display and for pre-filling a rename.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The bottom row of the tree's inner area, where the prompt is drawn.
