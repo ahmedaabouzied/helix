@@ -98,6 +98,13 @@ enum Action {
 }
 
 impl Action {
+    /// Pickers are pushed *over* the welcome screen so that dismissing one
+    /// comes back here instead of dropping onto the scratch buffer. Everything
+    /// else replaces the screen outright.
+    fn keeps_screen(self) -> bool {
+        matches!(self, Self::FindFile | Self::FileExplorer)
+    }
+
     fn run(self, compositor: &mut Compositor, cx: &mut Context) {
         match self {
             Self::FindFile => {
@@ -178,12 +185,24 @@ impl Welcome {
         Self::default()
     }
 
-    /// Removes the layer, then runs `action` on the compositor underneath.
+    /// Runs `action`, removing the layer first unless the action wants to be
+    /// layered on top of it.
     fn activate(action: Action) -> EventResult {
         EventResult::Consumed(Some(Box::new(move |compositor, cx| {
-            compositor.remove(Welcome::ID);
+            if !action.keeps_screen() {
+                compositor.remove(Welcome::ID);
+            }
             action.run(compositor, cx);
         })))
+    }
+
+    /// Whether the screen has outlived its purpose.
+    ///
+    /// A picker left on top of us can open a document at any time, and we get
+    /// no say in it. Once the editor has a real file to show, this layer stops
+    /// drawing and retires itself on the next event.
+    fn is_stale(editor: &Editor) -> bool {
+        doc!(editor).path().is_some()
     }
 
     /// Removes the layer but lets the key through to the editor underneath, so
@@ -214,6 +233,10 @@ impl Welcome {
 
 impl Component for Welcome {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        if Self::is_stale(cx.editor) {
+            return;
+        }
+
         let theme = &cx.editor.theme;
 
         // Leave the bottom row alone so the statusline still shows through.
@@ -297,7 +320,11 @@ impl Component for Welcome {
         }
     }
 
-    fn handle_event(&mut self, event: &Event, _cx: &mut Context) -> EventResult {
+    fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
+        if Self::is_stale(cx.editor) {
+            return Self::dismiss();
+        }
+
         let Event::Key(key) = event else {
             return EventResult::Ignored(None);
         };
@@ -326,7 +353,11 @@ impl Component for Welcome {
 
     /// The compositor walks layers front-to-back and stops at the first `Some`.
     /// Answering here is what suppresses the editor's own cursor.
-    fn cursor(&self, _area: Rect, _editor: &Editor) -> (Option<Position>, CursorKind) {
+    fn cursor(&self, _area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        if Self::is_stale(editor) {
+            return (None, CursorKind::Hidden);
+        }
+
         (Some(Position::default()), CursorKind::Hidden)
     }
 
