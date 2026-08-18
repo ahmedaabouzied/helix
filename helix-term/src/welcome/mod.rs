@@ -7,18 +7,23 @@
 
 use helix_core::{unicode::width::UnicodeWidthStr, Position};
 use helix_view::{
+    editor::Action as EditorAction,
     graphics::{CursorKind, Modifier, Rect},
+    input::KeyEvent,
+    keyboard::{KeyCode, KeyModifiers},
     Editor,
 };
 use tui::buffer::Buffer as Surface;
 
 use crate::{
     args::Args,
-    compositor::{Component, Context, Event, EventResult},
+    compositor::{Component, Compositor, Context, Event, EventResult},
     ctrl, key,
+    ui::{self, overlay::overlaid},
 };
 
 use std::io::{stdin, IsTerminal};
+use std::path::PathBuf;
 
 /// Drawn above the menu. Lines are centered individually, so they don't have to
 /// be the same length — swap this for whatever art you like.
@@ -35,26 +40,32 @@ const ITEMS: &[Item] = &[
     Item {
         key: 'f',
         label: "Find file",
+        action: Action::FindFile,
     },
     Item {
         key: 'e',
         label: "File explorer",
+        action: Action::FileExplorer,
     },
     Item {
         key: 'n',
         label: "New file",
+        action: Action::NewFile,
     },
     Item {
         key: 'c',
         label: "Open config",
+        action: Action::OpenConfig,
     },
     Item {
         key: 't',
         label: "Tutor",
+        action: Action::Tutor,
     },
     Item {
         key: 'q',
         label: "Quit",
+        action: Action::Quit,
     },
 ];
 
@@ -71,6 +82,81 @@ const FOOTER_HEIGHT: u16 = 1;
 struct Item {
     key: char,
     label: &'static str,
+    action: Action,
+}
+
+/// What a menu entry does once chosen. Every variant runs as a compositor
+/// callback, after the welcome layer has removed itself.
+#[derive(Clone, Copy)]
+enum Action {
+    FindFile,
+    FileExplorer,
+    NewFile,
+    OpenConfig,
+    Tutor,
+    Quit,
+}
+
+impl Action {
+    fn run(self, compositor: &mut Compositor, cx: &mut Context) {
+        match self {
+            Self::FindFile => {
+                let Some(root) = workspace_root(cx) else {
+                    return;
+                };
+                compositor.push(Box::new(overlaid(ui::file_picker(cx.editor, root))));
+            }
+            Self::FileExplorer => {
+                let Some(root) = workspace_root(cx) else {
+                    return;
+                };
+                match ui::file_explorer(root, cx.editor) {
+                    Ok(explorer) => compositor.push(Box::new(overlaid(explorer))),
+                    Err(err) => cx
+                        .editor
+                        .set_error(format!("Failed to open file explorer: {err}")),
+                }
+            }
+            // The scratch buffer the editor started with is already sitting
+            // underneath us, so dismissing the layer is the whole of "new file".
+            Self::NewFile => (),
+            Self::OpenConfig => {
+                if let Err(err) = cx
+                    .editor
+                    .open(&helix_loader::config_file(), EditorAction::Replace)
+                {
+                    cx.editor.set_error(format!("Failed to open config: {err}"));
+                }
+            }
+            Self::Tutor => match cx
+                .editor
+                .open(&helix_loader::runtime_file("tutor"), EditorAction::Replace)
+            {
+                // Unset the path to prevent accidentally saving to the original
+                // tutor file, the same way `Application::new` does.
+                Ok(_) => doc_mut!(cx.editor).set_path(None),
+                Err(err) => cx.editor.set_error(format!("Failed to open tutor: {err}")),
+            },
+            // Emptying the view tree is what `Editor::should_close` polls for.
+            // Nothing can be unsaved at this point: any key that could edit a
+            // buffer dismisses this layer before the editor ever sees it.
+            Self::Quit => {
+                let views: Vec<_> = cx.editor.tree.views().map(|(view, _)| view.id).collect();
+                for view in views {
+                    cx.editor.close(view);
+                }
+            }
+        }
+    }
+}
+
+fn workspace_root(cx: &mut Context) -> Option<PathBuf> {
+    let root = helix_loader::find_workspace().0;
+    if !root.exists() {
+        cx.editor.set_error("Workspace directory does not exist");
+        return None;
+    }
+    Some(root)
 }
 
 pub fn should_show(args: &Args) -> bool {
@@ -90,6 +176,30 @@ impl Welcome {
 
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Removes the layer, then runs `action` on the compositor underneath.
+    fn activate(action: Action) -> EventResult {
+        EventResult::Consumed(Some(Box::new(move |compositor, cx| {
+            compositor.remove(Welcome::ID);
+            action.run(compositor, cx);
+        })))
+    }
+
+    /// Removes the layer but lets the key through to the editor underneath, so
+    /// typing straight into the scratch buffer just works. `Ignored` with a
+    /// callback is the same auto-close trick `ui/popup.rs` uses.
+    fn dismiss() -> EventResult {
+        EventResult::Ignored(Some(Box::new(|compositor, _| {
+            compositor.remove(Welcome::ID);
+        })))
+    }
+
+    fn hotkey(c: char) -> Option<Action> {
+        ITEMS
+            .iter()
+            .find(|item| item.key == c)
+            .map(|item| item.action)
     }
 
     fn width() -> u16 {
@@ -201,12 +311,16 @@ impl Component for Welcome {
                 self.selected = self.selected.checked_sub(1).unwrap_or(ITEMS.len() - 1);
                 EventResult::Consumed(None)
             }
-            // Anything else dismisses and falls through to the editor, so typing
-            // straight into the scratch buffer just works. `Ignored` with a
-            // callback is the same auto-close trick `ui/popup.rs` uses.
-            _ => EventResult::Ignored(Some(Box::new(|compositor, _| {
-                compositor.remove(Welcome::ID);
-            }))),
+            key!(Enter) => Self::activate(ITEMS[self.selected].action),
+            // A menu hotkey runs its entry; every other bare key dismisses.
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE,
+            } => match Self::hotkey(c) {
+                Some(action) => Self::activate(action),
+                None => Self::dismiss(),
+            },
+            _ => Self::dismiss(),
         }
     }
 
