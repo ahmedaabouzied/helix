@@ -120,6 +120,66 @@ routing both through one helper means a future layout change cannot desync the
 cursor from the list. `MIN_WIDTH` in the fork module duplicates the value of
 `MIN_AREA_WIDTH_FOR_PREVIEW` because `helix-view` cannot depend on `helix-term`.
 
+### File tree
+
+`:file-tree` (aliased `:tree`) opens a modal file tree over the editor, in the
+manner of a picker. Bind it with `"C-n" = ":file-tree"` under `[keys.normal]`;
+no default binding is added, which is what keeps `keymap/default.rs` untouched.
+
+| key | |
+| --- | --- |
+| `j` `k` `↓` `↑` `C-n` `C-p` | move, wrapping |
+| `g` `G` | first row, last row |
+| `C-d` `C-u` `PageUp` `PageDown` | half a page, stopping at the ends |
+| `l` `Enter` `→` | expand or collapse a directory, open a file |
+| `h` `←` | collapse, or step out to the parent |
+| `a` `A` | create file, create directory |
+| `r` | rename |
+| `d` | delete, confirmed with `y` |
+| `Esc` `C-c` | close |
+
+Modal rather than a sidebar on purpose. A permanent pane costs width in every
+split forever — a real loss when Helix is already sharing the screen — and it
+would need `EditorView::render` to reserve space, putting a hook in the file
+upstream changes most. This needs neither.
+
+Owned files:
+
+| File | Contents |
+| --- | --- |
+| `helix-term/src/file_tree/model.rs` | rows, expansion, selection, and the directory read; unit tested |
+| `helix-term/src/file_tree/mod.rs` | the `Component`, its keys, and the file operations |
+
+Upstream files touched:
+
+| File | Change |
+| --- | --- |
+| `helix-term/src/lib.rs` | `pub mod file_tree;` |
+| `helix-term/src/commands/typed.rs` | one `TYPABLE_COMMAND_LIST` entry, appended at the end |
+
+The command entry sits at the *end* of the list rather than in name order: a
+neighbouring upstream edit would otherwise collide with the fork block, whereas
+at the end the only conflicts are upstream's own appends, which resolve as "keep
+both". `fun` points at `crate::file_tree::open`, so no fork logic lives in
+`typed.rs`.
+
+Two things worth knowing before changing this code:
+
+- **Rows are stored flattened in display order**, not as a nested tree.
+  Expanding splices children in behind their parent; collapsing drains the run
+  of deeper rows that follows. Rendering and cursor movement index straight into
+  that list. `expand` and `collapse` maintain the selection themselves, so a row
+  vanishing from under the cursor cannot leave it pointing at the wrong file.
+- **Every file operation goes through `Editor`**, never `std::fs` — `create_path`,
+  `move_path`, `delete_path`. Each sends the matching `will*`/`did*` LSP
+  notification, which is how a language server updates imports across the
+  workspace when a file is renamed. Note `create_path` writes with `fs::write`
+  and would truncate an existing file, so creation checks for one first.
+
+The root has no row of its own, so creating or deleting directly inside it
+rebuilds the listing and collapses everything. Giving the root a row would fix
+that, at the cost of reworking the model and its tests.
+
 ## Merging upstream
 
 One-time setup:
