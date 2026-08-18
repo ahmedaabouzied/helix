@@ -4108,7 +4108,20 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         fun: exclude_workspace,
         completer: CommandCompleter::none(),
         signature: Signature { positionals: (0, None), ..Signature::DEFAULT },
-    }
+    },
+    // ====== fork: file tree (begin) ======
+    TypableCommand {
+        name: "file-tree",
+        aliases: &["tree"],
+        doc: "Open the file tree.",
+        fun: crate::file_tree::open,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    // ====== fork: file tree (end) ======
 ];
 
 pub static TYPABLE_COMMAND_MAP: Lazy<HashMap<&'static str, &'static TypableCommand>> =
