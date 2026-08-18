@@ -46,6 +46,9 @@ impl Entry {
 pub struct Tree {
     root: PathBuf,
     entries: Vec<Entry>,
+    /// Index into `entries`. Meaningless while the tree is empty, where it
+    /// stays at 0 and `selected_entry` reports `None`.
+    selected: usize,
 }
 
 impl Tree {
@@ -56,7 +59,11 @@ impl Tree {
             .map(|(path, is_dir)| Entry::new(path, is_dir, 0))
             .collect();
 
-        Self { root, entries }
+        Self {
+            root,
+            entries,
+            selected: 0,
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -125,6 +132,55 @@ impl Tree {
             .unwrap_or(self.entries.len());
 
         self.entries.drain(index + 1..end);
+    }
+
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+
+    pub fn selected_entry(&self) -> Option<&Entry> {
+        self.entries.get(self.selected)
+    }
+
+    /// Moves the cursor to `index`, clamped to the last row.
+    pub fn select(&mut self, index: usize) {
+        self.selected = index.min(self.entries.len().saturating_sub(1));
+    }
+
+    /// Moves down a row, wrapping at the bottom — as Helix's own pickers do.
+    pub fn select_next(&mut self) {
+        if !self.entries.is_empty() {
+            self.selected = (self.selected + 1) % self.entries.len();
+        }
+    }
+
+    /// Moves up a row, wrapping at the top.
+    pub fn select_prev(&mut self) {
+        if !self.entries.is_empty() {
+            self.selected = self
+                .selected
+                .checked_sub(1)
+                .unwrap_or(self.entries.len() - 1);
+        }
+    }
+
+    /// Moves `rows` down, or up when negative. Stops at either end rather than
+    /// wrapping: a page jump that wrapped would lose the reader's place.
+    pub fn select_by(&mut self, rows: isize) {
+        if self.entries.is_empty() {
+            return;
+        }
+
+        let last = self.entries.len() - 1;
+        self.selected = self.selected.saturating_add_signed(rows).min(last);
+    }
+
+    pub fn select_first(&mut self) {
+        self.selected = 0;
+    }
+
+    pub fn select_last(&mut self) {
+        self.selected = self.entries.len().saturating_sub(1);
     }
 
     /// The index of the row holding `path`, if it is currently visible.
@@ -299,6 +355,51 @@ mod tests {
 
         tree.collapse(0);
         assert_eq!(tree.position(Path::new("main.rs")), None);
+    }
+
+    #[test]
+    fn selection_wraps_at_both_ends() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("a"), file("b"), file("c")]);
+
+        assert_eq!(tree.selected(), 0);
+        tree.select_prev();
+        assert_eq!(tree.selected(), 2, "up from the top wraps to the bottom");
+        tree.select_next();
+        assert_eq!(tree.selected(), 0, "down from the bottom wraps to the top");
+    }
+
+    #[test]
+    fn page_movement_stops_at_the_ends_instead_of_wrapping() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("a"), file("b"), file("c")]);
+
+        tree.select_by(99);
+        assert_eq!(tree.selected(), 2);
+        tree.select_by(-99);
+        assert_eq!(tree.selected(), 0);
+    }
+
+    #[test]
+    fn select_clamps_past_the_end() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("a"), file("b")]);
+
+        tree.select(99);
+        assert_eq!(tree.selected(), 1);
+        tree.select_last();
+        assert_eq!(tree.selected(), 1);
+    }
+
+    #[test]
+    fn moving_around_an_empty_tree_is_harmless() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![]);
+
+        tree.select_next();
+        tree.select_prev();
+        tree.select_by(5);
+        tree.select_last();
+        tree.select(3);
+
+        assert_eq!(tree.selected(), 0);
+        assert!(tree.selected_entry().is_none());
     }
 
     #[test]

@@ -24,7 +24,7 @@ use tui::{
 
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
-    ctrl, job, key,
+    ctrl, job, key, shift,
     ui::{overlay::overlaid, PromptEvent},
 };
 
@@ -37,6 +37,12 @@ const MARKER_WIDTH: usize = 2;
 
 pub struct FileTree {
     tree: Tree,
+    /// First visible row. Kept in the component rather than the model because
+    /// it only means anything against a viewport height, which is known at
+    /// render time.
+    offset: usize,
+    /// Rows the last render could fit, for page movement.
+    height: usize,
 }
 
 impl FileTree {
@@ -49,7 +55,34 @@ impl FileTree {
 
         Ok(Self {
             tree: Tree::new(root, children),
+            offset: 0,
+            height: 0,
         })
+    }
+}
+
+impl FileTree {
+    /// Rows a page jump covers: half a screen, matching Helix's `C-d`/`C-u`.
+    fn page(&self) -> isize {
+        (self.height / 2).max(1) as isize
+    }
+
+    /// Drags the viewport just far enough to keep the cursor on screen.
+    fn scroll_to_selection(&mut self) {
+        if self.height == 0 {
+            return;
+        }
+
+        // Clamp first, so a tree that shrank cannot leave the viewport parked
+        // past the end, then correct for the cursor.
+        self.offset = self.offset.min(self.tree.len().saturating_sub(self.height));
+
+        let selected = self.tree.selected();
+        if selected < self.offset {
+            self.offset = selected;
+        } else if selected >= self.offset + self.height {
+            self.offset = selected + 1 - self.height;
+        }
     }
 }
 
@@ -58,6 +91,8 @@ impl Component for FileTree {
         let theme = &cx.editor.theme;
         let text_style = theme.get("ui.text");
         let directory_style = theme.get("ui.text.directory");
+
+        let selected_style = theme.get("ui.menu.selected");
 
         surface.clear_with(area, theme.get("ui.background"));
 
@@ -68,13 +103,18 @@ impl Component for FileTree {
         let inner = block.inner(area);
         block.render(area, surface);
 
-        for (row, entry) in self
+        self.height = inner.height as usize;
+        self.scroll_to_selection();
+
+        for (index, entry) in self
             .tree
             .entries()
             .iter()
-            .take(inner.height as usize)
             .enumerate()
+            .skip(self.offset)
+            .take(self.height)
         {
+            let row = index - self.offset;
             let indent = entry.depth * INDENT;
             let marker = match (entry.is_dir, entry.expanded) {
                 (true, true) => "▾ ",
@@ -82,7 +122,7 @@ impl Component for FileTree {
                 (false, _) => "  ",
             };
             let name = entry.name();
-            let (name, style) = if entry.is_dir {
+            let (name, mut style) = if entry.is_dir {
                 (format!("{name}/"), directory_style)
             } else {
                 (name.into_owned(), text_style)
@@ -91,6 +131,21 @@ impl Component for FileTree {
             let x = inner.x + indent as u16;
             let y = inner.y + row as u16;
             let width = inner.width.saturating_sub(indent as u16) as usize;
+
+            if index == self.tree.selected() {
+                // Paint the whole row first so the highlight reads as a bar,
+                // then let the text inherit that background.
+                surface.set_style(
+                    Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 1,
+                    },
+                    selected_style,
+                );
+                style = selected_style;
+            }
 
             surface.set_stringn(x, y, marker, width, style);
             surface.set_stringn(
@@ -109,13 +164,23 @@ impl Component for FileTree {
         };
 
         match *key {
-            key!(Esc) | ctrl!('c') => EventResult::Consumed(Some(Box::new(|compositor, _| {
-                compositor.remove(FileTree::ID);
-            }))),
+            key!(Esc) | ctrl!('c') => {
+                return EventResult::Consumed(Some(Box::new(|compositor, _| {
+                    compositor.remove(FileTree::ID);
+                })))
+            }
+            key!('j') | key!(Down) | ctrl!('n') => self.tree.select_next(),
+            key!('k') | key!(Up) | ctrl!('p') => self.tree.select_prev(),
+            key!('g') => self.tree.select_first(),
+            shift!('G') => self.tree.select_last(),
+            key!(PageDown) | ctrl!('d') => self.tree.select_by(self.page()),
+            key!(PageUp) | ctrl!('u') => self.tree.select_by(-self.page()),
             // Modal: swallow everything else rather than let it reach the
             // buffer underneath.
-            _ => EventResult::Consumed(None),
+            _ => {}
         }
+
+        EventResult::Consumed(None)
     }
 
     /// Answering here keeps the editor's cursor from showing through; the
