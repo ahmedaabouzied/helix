@@ -434,6 +434,10 @@ pub struct Config {
     pub buffer_picker: BufferPickerConfig,
     /// Workspace-trust configuration.
     pub workspace_trust: WorkspaceTrustConfig,
+    // ====== fork: picker preview layout (begin) ======
+    /// Where the picker draws its preview: `right` (default) or `bottom`.
+    pub picker_preview: crate::fork::picker_preview::PickerPreview,
+    // ====== fork: picker preview layout (end) ======
 }
 
 /// User-facing configuration for `[editor.workspace-trust]`.
@@ -1240,6 +1244,8 @@ impl Default for Config {
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
             workspace_trust: WorkspaceTrustConfig::default(),
+            // fork: picker preview layout
+            picker_preview: Default::default(),
         }
     }
 }
