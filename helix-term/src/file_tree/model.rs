@@ -101,6 +101,7 @@ impl Tree {
 
         entry.expanded = true;
         let depth = entry.depth + 1;
+        let count = children.len();
 
         self.entries.splice(
             index + 1..index + 1,
@@ -108,6 +109,12 @@ impl Tree {
                 .into_iter()
                 .map(|(path, is_dir)| Entry::new(path, is_dir, depth)),
         );
+
+        // Rows below the parent all shifted down; carry the cursor with them so
+        // it keeps pointing at the same file.
+        if self.selected > index {
+            self.selected += count;
+        }
     }
 
     /// Removes the rows nested under the directory at `index`.
@@ -132,6 +139,29 @@ impl Tree {
             .unwrap_or(self.entries.len());
 
         self.entries.drain(index + 1..end);
+
+        // The cursor may have been standing on a row that just vanished, or
+        // below the ones that did.
+        if self.selected > index {
+            self.selected = if self.selected < end {
+                index
+            } else {
+                self.selected - (end - index - 1)
+            };
+        }
+    }
+
+    /// The row holding the directory that `index` sits inside, if any. Rows at
+    /// depth 0 have no parent in the tree — their parent is the root itself.
+    pub fn parent_of(&self, index: usize) -> Option<usize> {
+        let depth = self.entries.get(index)?.depth;
+        if depth == 0 {
+            return None;
+        }
+
+        self.entries[..index]
+            .iter()
+            .rposition(|entry| entry.depth < depth)
     }
 
     pub fn selected(&self) -> usize {
@@ -355,6 +385,55 @@ mod tests {
 
         tree.collapse(0);
         assert_eq!(tree.position(Path::new("main.rs")), None);
+    }
+
+    #[test]
+    fn parent_of_finds_the_enclosing_directory() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("src"), file("a.rs")]);
+        tree.expand(0, vec![dir("ui"), file("main.rs")]);
+        tree.expand(1, vec![file("menu.rs")]);
+        // src / ui / menu.rs / main.rs / a.rs
+
+        assert_eq!(tree.parent_of(2), Some(1), "menu.rs sits inside ui");
+        assert_eq!(tree.parent_of(3), Some(0), "main.rs sits inside src");
+        assert_eq!(tree.parent_of(0), None, "depth 0 has no parent row");
+        assert_eq!(tree.parent_of(99), None);
+    }
+
+    #[test]
+    fn expanding_above_the_cursor_carries_it_down() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("src"), file("a.rs")]);
+        tree.select(1);
+
+        tree.expand(0, vec![file("main.rs"), file("lib.rs")]);
+
+        assert_eq!(tree.selected_entry().unwrap().name(), "a.rs");
+        assert_eq!(tree.selected(), 3, "the cursor followed its row down");
+    }
+
+    #[test]
+    fn collapsing_over_the_cursor_moves_it_to_the_parent() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("src"), file("a.rs")]);
+        tree.expand(0, vec![file("main.rs")]);
+        tree.select(1);
+
+        tree.collapse(0);
+
+        assert_eq!(tree.selected(), 0, "the selected row is gone; land on src");
+        assert_eq!(tree.selected_entry().unwrap().name(), "src");
+    }
+
+    #[test]
+    fn collapsing_above_the_cursor_carries_it_up() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("src"), file("a.rs")]);
+        tree.expand(0, vec![file("main.rs"), file("lib.rs")]);
+        tree.select(3);
+        assert_eq!(tree.selected_entry().unwrap().name(), "a.rs");
+
+        tree.collapse(0);
+
+        assert_eq!(tree.selected(), 1, "still on a.rs, two rows higher");
+        assert_eq!(tree.selected_entry().unwrap().name(), "a.rs");
     }
 
     #[test]

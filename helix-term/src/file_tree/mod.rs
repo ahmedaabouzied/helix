@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use helix_core::{command_line::Args, Position};
 use helix_view::{
+    editor::Action,
     graphics::{CursorKind, Rect},
     Editor,
 };
@@ -43,6 +44,10 @@ pub struct FileTree {
     offset: usize,
     /// Rows the last render could fit, for page movement.
     height: usize,
+    /// Read once at open: directories opened later use the same rule as the
+    /// root listing, so the tree stays internally consistent even if the
+    /// setting changes mid-session.
+    show_hidden: bool,
 }
 
 impl FileTree {
@@ -57,6 +62,7 @@ impl FileTree {
             tree: Tree::new(root, children),
             offset: 0,
             height: 0,
+            show_hidden,
         })
     }
 }
@@ -65,6 +71,55 @@ impl FileTree {
     /// Rows a page jump covers: half a screen, matching Helix's `C-d`/`C-u`.
     fn page(&self) -> isize {
         (self.height / 2).max(1) as isize
+    }
+
+    /// Opens the selected row: directories toggle, files load into the editor
+    /// and close the tree.
+    fn activate(&mut self, cx: &mut Context) -> EventResult {
+        let Some(entry) = self.tree.selected_entry() else {
+            return EventResult::Consumed(None);
+        };
+        let (path, is_dir, expanded) = (entry.path.clone(), entry.is_dir, entry.expanded);
+        let index = self.tree.selected();
+
+        if !is_dir {
+            return EventResult::Consumed(Some(Box::new(move |compositor, cx: &mut Context| {
+                compositor.remove(FileTree::ID);
+                if let Err(err) = cx.editor.open(&path, Action::Replace) {
+                    cx.editor
+                        .set_error(format!("Failed to open {}: {err}", path.display()));
+                }
+            })));
+        }
+
+        if expanded {
+            self.tree.collapse(index);
+        } else {
+            match model::read_dir(&path, self.show_hidden) {
+                Ok(children) => self.tree.expand(index, children),
+                Err(err) => cx
+                    .editor
+                    .set_error(format!("Failed to read {}: {err}", path.display())),
+            }
+        }
+
+        EventResult::Consumed(None)
+    }
+
+    /// Shuts the selected directory, or steps out to the one containing it.
+    /// Repeated presses walk back up the tree, which is what makes `h` useful
+    /// on a file as well as on a directory.
+    fn collapse_or_leave(&mut self) {
+        let index = self.tree.selected();
+        let Some(entry) = self.tree.get(index) else {
+            return;
+        };
+
+        if entry.is_dir && entry.expanded {
+            self.tree.collapse(index);
+        } else if let Some(parent) = self.tree.parent_of(index) {
+            self.tree.select(parent);
+        }
     }
 
     /// Drags the viewport just far enough to keep the cursor on screen.
@@ -158,7 +213,7 @@ impl Component for FileTree {
         }
     }
 
-    fn handle_event(&mut self, event: &Event, _cx: &mut Context) -> EventResult {
+    fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
         let Event::Key(key) = event else {
             return EventResult::Ignored(None);
         };
@@ -175,6 +230,8 @@ impl Component for FileTree {
             shift!('G') => self.tree.select_last(),
             key!(PageDown) | ctrl!('d') => self.tree.select_by(self.page()),
             key!(PageUp) | ctrl!('u') => self.tree.select_by(-self.page()),
+            key!('l') | key!(Enter) | key!(Right) => return self.activate(cx),
+            key!('h') | key!(Left) => self.collapse_or_leave(),
             // Modal: swallow everything else rather than let it reach the
             // buffer underneath.
             _ => {}
