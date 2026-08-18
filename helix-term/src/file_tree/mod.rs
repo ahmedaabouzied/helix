@@ -52,6 +52,18 @@ pub struct FileTree {
     /// tree rather than pushed as its own layer, so that acting on the answer
     /// needs no reaching across the compositor to find this component again.
     prompt: Option<(Pending, Prompt)>,
+    /// A destructive action waiting on a yes.
+    confirm: Option<Confirm>,
+}
+
+/// A pending deletion. Held rather than acted on immediately so the question
+/// can be shown and answered.
+#[derive(Debug)]
+struct Confirm {
+    message: String,
+    path: PathBuf,
+    /// Directories are removed with their contents; files never need this.
+    recursive: bool,
 }
 
 /// What the open prompt is collecting a name for.
@@ -78,6 +90,7 @@ impl FileTree {
             height: 0,
             show_hidden,
             prompt: None,
+            confirm: None,
         })
     }
 }
@@ -104,6 +117,47 @@ impl FileTree {
         }
 
         self.prompt = Some((pending, prompt));
+    }
+
+    /// Asks before deleting the selected row.
+    fn ask_delete(&mut self) {
+        let Some(entry) = self.tree.selected_entry() else {
+            return;
+        };
+
+        let name = file_name(&entry.path);
+        let message = if entry.is_dir {
+            // Say plainly that this takes the contents too — the row on screen
+            // may well be collapsed, hiding everything about to be destroyed.
+            format!("delete {name}/ and everything in it? (y/N) ")
+        } else {
+            format!("delete {name}? (y/N) ")
+        };
+
+        self.confirm = Some(Confirm {
+            message,
+            path: entry.path.clone(),
+            recursive: entry.is_dir,
+        });
+    }
+
+    /// Only `y` goes through. Every other key cancels, rather than only `Esc`:
+    /// a keystroke landing here by accident must not be able to delete a file.
+    fn handle_confirm_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
+        let Event::Key(key) = event else {
+            return EventResult::Consumed(None);
+        };
+
+        match *key {
+            key!('y') => {
+                if let Some(confirm) = self.confirm.take() {
+                    self.delete(&confirm.path, confirm.recursive, cx);
+                }
+            }
+            _ => self.confirm = None,
+        }
+
+        EventResult::Consumed(None)
     }
 
     /// Opens a rename prompt for the selected row.
@@ -236,6 +290,28 @@ impl FileTree {
         }
     }
 
+    /// Removes an entry, then re-reads the directory it lived in.
+    ///
+    /// Goes through `Editor::delete_path` for the same reason rename goes
+    /// through `move_path`: language servers get `willDelete`/`didDelete`, so a
+    /// server can react to a file leaving the workspace.
+    fn delete(&mut self, path: &Path, recursive: bool, cx: &mut Context) {
+        // Work out where to re-read *before* the row disappears.
+        let (directory, index) = self
+            .tree
+            .position(path)
+            .map(|index| self.containing_directory(index))
+            .unwrap_or_else(|| self.target_directory());
+
+        if let Err(err) = cx.editor.delete_path(path, recursive) {
+            cx.editor
+                .set_error(format!("Failed to delete {}: {err}", path.display()));
+            return;
+        }
+
+        self.refresh(index, &directory, cx);
+    }
+
     /// Re-reads a directory from disk after its contents changed.
     fn refresh(&mut self, index: Option<usize>, directory: &Path, cx: &mut Context) {
         let children = match model::read_dir(directory, self.show_hidden) {
@@ -331,6 +407,7 @@ impl Component for FileTree {
         let directory_style = theme.get("ui.text.directory");
 
         let selected_style = theme.get("ui.menu.selected");
+        let warning_style = theme.get("warning");
 
         surface.clear_with(area, theme.get("ui.background"));
 
@@ -341,7 +418,9 @@ impl Component for FileTree {
         let inner = block.inner(area);
         block.render(area, surface);
 
-        let list = if self.prompt.is_some() {
+        // The prompt and the confirmation share the bottom row; only one can
+        // be open at a time.
+        let list = if self.prompt.is_some() || self.confirm.is_some() {
             inner.clip_bottom(1)
         } else {
             inner
@@ -401,12 +480,27 @@ impl Component for FileTree {
             );
         }
 
+        if let Some(confirm) = &self.confirm {
+            let row = prompt_row(inner);
+            surface.set_stringn(
+                row.x,
+                row.y,
+                &confirm.message,
+                row.width as usize,
+                warning_style,
+            );
+        }
+
         if let Some((_, prompt)) = &mut self.prompt {
             prompt.render(prompt_row(inner), surface, cx);
         }
     }
 
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
+        if self.confirm.is_some() {
+            return self.handle_confirm_event(event, cx);
+        }
+
         if self.prompt.is_some() {
             return self.handle_prompt_event(event, cx);
         }
@@ -432,6 +526,7 @@ impl Component for FileTree {
             key!('a') => self.ask(Pending::CreateFile, cx.editor),
             shift!('A') => self.ask(Pending::CreateDirectory, cx.editor),
             key!('r') => self.ask_rename(cx.editor),
+            key!('d') => self.ask_delete(),
             // Modal: swallow everything else rather than let it reach the
             // buffer underneath.
             _ => {}
