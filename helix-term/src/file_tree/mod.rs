@@ -223,17 +223,18 @@ impl FileTree {
         let (directory, index) = self.target_directory();
         let path = directory.join(name);
 
-        // A name may carry directories of its own — `ui/menu.rs` creates `ui`
-        // on the way. `create_new` then refuses to clobber an existing file.
-        let created = if directory_wanted {
-            std::fs::create_dir_all(&path)
-        } else {
-            path.parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::File::create_new(&path).map(|_| ()))
-        };
+        // `Editor::create_path` writes an empty file with `fs::write`, which
+        // truncates whatever is already there. Refuse first: typing a name that
+        // happens to exist must never silently empty it.
+        if path.exists() {
+            cx.editor
+                .set_error(format!("{} already exists", path.display()));
+            return;
+        }
 
-        if let Err(err) = created {
+        // A name may carry directories of its own — `ui/menu.rs` creates `ui`
+        // on the way, which `create_path` handles.
+        if let Err(err) = cx.editor.create_path(&path, directory_wanted) {
             cx.editor
                 .set_error(format!("Failed to create {}: {err}", path.display()));
             return;
