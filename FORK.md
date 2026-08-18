@@ -150,6 +150,9 @@ Owned files:
 | `helix-term/src/file_tree/model.rs` | rows, expansion, selection, and the directory read; unit tested |
 | `helix-term/src/file_tree/mod.rs` | the `Component`, its keys, and the file operations |
 
+Rows are drawn as `indent | marker | icon | name`; the icons come from
+[File-type icons](#file-type-icons) below.
+
 Upstream files touched:
 
 | File | Change |
@@ -179,6 +182,48 @@ Two things worth knowing before changing this code:
 The root has no row of its own, so creating or deleting directly inside it
 rebuilds the listing and collapses everything. Giving the root a row would fix
 that, at the cost of reworking the model and its tests.
+
+### File-type icons
+
+`helix_view::fork::icons` maps a path to a Nerd Font glyph and a colour:
+
+```rust
+icons::for_file(path)          // -> Icon { glyph, color }
+icons::for_directory(expanded) // -> Icon
+```
+
+Generated from the `icons_by_file_extension` and `icons_by_filename` tables of
+[nvim-web-devicons](https://github.com/nvim-tree/nvim-web-devicons), so glyphs
+and colours match the Neovim setup this fork's theme was ported from. 212
+whole-name entries, 484 by extension. Regenerate by re-parsing those Lua tables
+if the plugin is updated — the file is generated and not meant to be edited by
+hand.
+
+Owned files, and no upstream files at all:
+
+| File | Contents |
+| --- | --- |
+| `helix-view/src/fork/icons.rs` | the tables and the lookup |
+
+It sits in `helix-view` rather than beside its only current caller so that
+anything rendering a path can reach it — the file tree today, a statusline or
+bufferline later. Registering it costs nothing, because `helix-view/src/fork/`
+is itself fork-owned.
+
+Three things to know before changing it:
+
+- **Lookup order is whole filename, then extension, then the whole name again as
+  an extension.** That last step is not redundant: devicons keys extensionless
+  names like `Dockerfile` and `Makefile` in the *extension* table. Dropping it
+  silently loses their icons.
+- **Both tables are sorted and searched with `binary_search`.** A test guards the
+  ordering, because an out-of-order edit does not fail loudly — lookups just
+  start missing.
+- **Icons are drawn with `style.fg(icon.color)`**, which replaces only the
+  foreground, so a selected row keeps its highlight behind the glyph and the
+  glyph keeps its own colour. Drop the `.fg(...)` to make icons follow the
+  theme instead. `ICON_WIDTH` assumes glyphs measure one cell, as Nerd Fonts
+  and nvim do; a terminal that renders them double-width needs 3.
 
 ## Merging upstream
 
