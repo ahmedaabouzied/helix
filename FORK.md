@@ -88,6 +88,38 @@ the baked one *and* is shared with every other Helix on the machine, so an older
 `hx` would pick up this fork's grammars and fail to load them across the
 tree-sitter ABI gap.
 
+### Picker preview layout
+
+`editor.picker-preview` chooses where the picker draws its preview: `right`
+(upstream's layout, the default) or `bottom`. Upstream always splits left/right,
+which halves the width a second time when Helix is itself in a vertical split —
+list and preview each end up a quarter of the screen wide.
+
+```toml
+[editor]
+picker-preview = "bottom"
+```
+
+Owned files:
+
+| File | Contents |
+| --- | --- |
+| `helix-view/src/fork/mod.rs` | fork-local additions to `helix-view` |
+| `helix-view/src/fork/picker_preview.rs` | the `PickerPreview` enum, the split, and its tests |
+
+Upstream files touched:
+
+| File | Change |
+| --- | --- |
+| `helix-view/src/lib.rs` | `pub mod fork;` |
+| `helix-view/src/editor.rs` | one `Config` field and its default |
+| `helix-term/src/ui/picker.rs` | a `layout` helper, called from `render` and `cursor` |
+
+`render` and `cursor` previously carried the same layout arithmetic twice;
+routing both through one helper means a future layout change cannot desync the
+cursor from the list. `MIN_WIDTH` in the fork module duplicates the value of
+`MIN_AREA_WIDTH_FOR_PREVIEW` because `helix-view` cannot depend on `helix-term`.
+
 ## Merging upstream
 
 One-time setup:
