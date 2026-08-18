@@ -879,6 +879,18 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         );
     }
 
+    // ====== fork: picker preview layout (begin) ======
+    /// Splits `area` into the list area and, when one should be drawn, the
+    /// preview area. `render` and `cursor` must agree on this, so they share it.
+    fn layout(&self, area: Rect, editor: &Editor) -> (Rect, Option<Rect>) {
+        if self.show_preview && self.file_fn.is_some() {
+            editor.config().picker_preview.split(area)
+        } else {
+            (area, None)
+        }
+    }
+    // ====== fork: picker preview layout (end) ======
+
     fn render_preview(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         // -- Render the frame:
         // clear area
@@ -1025,27 +1037,21 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 
 impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I, D> {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
-        // +---------+ +---------+
-        // |prompt   | |preview  |
-        // +---------+ |         |
-        // |picker   | |         |
-        // |         | |         |
-        // +---------+ +---------+
+        // +---------+ +---------+      +---------------------+
+        // |prompt   | |preview  |      |prompt               |
+        // +---------+ |         |      +---------------------+
+        // |picker   | |         |      |picker               |
+        // |         | |         |      +---------------------+
+        // +---------+ +---------+      |preview              |
+        //                              +---------------------+
+        //   editor.picker-preview        editor.picker-preview
+        //         = "right"                    = "bottom"
 
-        let render_preview =
-            self.show_preview && self.file_fn.is_some() && area.width > MIN_AREA_WIDTH_FOR_PREVIEW;
+        let (picker_area, preview_area) = self.layout(area, cx.editor);
 
-        let picker_width = if render_preview {
-            area.width / 2
-        } else {
-            area.width
-        };
-
-        let picker_area = area.with_width(picker_width);
         self.render_picker(picker_area, surface, cx);
 
-        if render_preview {
-            let preview_area = area.clip_left(picker_width);
+        if let Some(preview_area) = preview_area {
             self.render_preview(preview_area, surface, cx);
         }
     }
@@ -1175,15 +1181,11 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
         let inner = block.inner(area);
 
         // prompt area
-        let render_preview =
-            self.show_preview && self.file_fn.is_some() && area.width > MIN_AREA_WIDTH_FOR_PREVIEW;
-
-        let picker_width = if render_preview {
-            area.width / 2
-        } else {
-            area.width
-        };
-        let area = inner.clip_left(1).with_height(1).with_width(picker_width);
+        let (picker_area, _) = self.layout(area, editor);
+        let area = inner
+            .clip_left(1)
+            .with_height(1)
+            .with_width(picker_area.width);
 
         self.prompt.cursor(area, editor)
     }
