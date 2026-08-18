@@ -6,8 +6,10 @@ pub mod annotations;
 pub mod clipboard;
 pub mod document;
 pub mod editor;
+// fork: see fork/mod.rs
 pub mod events;
 pub mod expansion;
+pub mod fork;
 pub mod graphics;
 pub mod gutter;
 pub mod handlers;
