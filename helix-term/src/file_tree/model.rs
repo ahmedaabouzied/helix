@@ -151,6 +151,18 @@ impl Tree {
         }
     }
 
+    /// Rebuilds every row from a fresh listing of the root, dropping expansion
+    /// state. Only for changes to the root's own contents — a change inside a
+    /// directory is re-read through `collapse` + `expand` on that row, which
+    /// leaves the rest of the tree alone.
+    pub fn reset(&mut self, children: Vec<(PathBuf, bool)>) {
+        self.entries = children
+            .into_iter()
+            .map(|(path, is_dir)| Entry::new(path, is_dir, 0))
+            .collect();
+        self.select(self.selected);
+    }
+
     /// The row holding the directory that `index` sits inside, if any. Rows at
     /// depth 0 have no parent in the tree — their parent is the root itself.
     pub fn parent_of(&self, index: usize) -> Option<usize> {

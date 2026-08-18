@@ -10,7 +10,7 @@
 
 pub mod model;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use helix_core::{command_line::Args, Position};
 use helix_view::{
@@ -26,7 +26,7 @@ use tui::{
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
     ctrl, job, key, shift,
-    ui::{overlay::overlaid, PromptEvent},
+    ui::{completers, overlay::overlaid, Prompt, PromptEvent},
 };
 
 use model::Tree;
@@ -48,6 +48,17 @@ pub struct FileTree {
     /// root listing, so the tree stays internally consistent even if the
     /// setting changes mid-session.
     show_hidden: bool,
+    /// An in-progress prompt and what it will do once submitted. Owned by the
+    /// tree rather than pushed as its own layer, so that acting on the answer
+    /// needs no reaching across the compositor to find this component again.
+    prompt: Option<(Pending, Prompt)>,
+}
+
+/// What the open prompt is collecting a name for.
+#[derive(Debug, Clone, Copy)]
+enum Pending {
+    CreateFile,
+    CreateDirectory,
 }
 
 impl FileTree {
@@ -63,6 +74,7 @@ impl FileTree {
             offset: 0,
             height: 0,
             show_hidden,
+            prompt: None,
         })
     }
 }
@@ -71,6 +83,112 @@ impl FileTree {
     /// Rows a page jump covers: half a screen, matching Helix's `C-d`/`C-u`.
     fn page(&self) -> isize {
         (self.height / 2).max(1) as isize
+    }
+
+    /// Starts collecting a name for `pending`.
+    fn ask(&mut self, pending: Pending) {
+        let label = match pending {
+            Pending::CreateFile => "create file: ",
+            Pending::CreateDirectory => "create directory: ",
+        };
+
+        self.prompt = Some((
+            pending,
+            Prompt::new(label.into(), None, completers::none, |_, _, _| {}),
+        ));
+    }
+
+    /// While a prompt is open it owns the keyboard, so the tree's own bindings
+    /// stay out of the way of typing a filename.
+    fn handle_prompt_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
+        let Event::Key(key) = event else {
+            return EventResult::Consumed(None);
+        };
+
+        match *key {
+            key!(Enter) => {
+                if let Some((pending, prompt)) = self.prompt.take() {
+                    let name = prompt.line().trim().to_string();
+                    if !name.is_empty() {
+                        self.create(&name, pending, cx);
+                    }
+                }
+            }
+            key!(Esc) | ctrl!('c') => self.prompt = None,
+            _ => {
+                if let Some((_, prompt)) = &mut self.prompt {
+                    prompt.handle_event(event, cx);
+                }
+            }
+        }
+
+        EventResult::Consumed(None)
+    }
+
+    /// The directory new entries land in, and the row to re-read afterwards.
+    /// `None` means the root, which has no row of its own.
+    fn target_directory(&self) -> (PathBuf, Option<usize>) {
+        let root = || (self.tree.root().to_path_buf(), None);
+
+        let Some(entry) = self.tree.selected_entry() else {
+            return root();
+        };
+
+        if entry.is_dir {
+            return (entry.path.clone(), Some(self.tree.selected()));
+        }
+
+        match self.tree.parent_of(self.tree.selected()) {
+            Some(index) => (self.tree.get(index).unwrap().path.clone(), Some(index)),
+            None => root(),
+        }
+    }
+
+    fn create(&mut self, name: &str, pending: Pending, cx: &mut Context) {
+        let (directory, index) = self.target_directory();
+        let path = directory.join(name);
+
+        // A name may carry directories of its own — `ui/menu.rs` creates `ui`
+        // on the way. `create_new` then refuses to clobber an existing file.
+        let created = match pending {
+            Pending::CreateDirectory => std::fs::create_dir_all(&path),
+            Pending::CreateFile => path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::File::create_new(&path).map(|_| ())),
+        };
+
+        if let Err(err) = created {
+            cx.editor
+                .set_error(format!("Failed to create {}: {err}", path.display()));
+            return;
+        }
+
+        self.refresh(index, &directory, cx);
+
+        if let Some(index) = self.tree.position(&path) {
+            self.tree.select(index);
+        }
+    }
+
+    /// Re-reads a directory from disk after its contents changed.
+    fn refresh(&mut self, index: Option<usize>, directory: &Path, cx: &mut Context) {
+        let children = match model::read_dir(directory, self.show_hidden) {
+            Ok(children) => children,
+            Err(err) => {
+                cx.editor
+                    .set_error(format!("Failed to read {}: {err}", directory.display()));
+                return;
+            }
+        };
+
+        match index {
+            Some(index) => {
+                self.tree.collapse(index);
+                self.tree.expand(index, children);
+            }
+            None => self.tree.reset(children),
+        }
     }
 
     /// Opens the selected row: directories toggle, files load into the editor
@@ -158,7 +276,13 @@ impl Component for FileTree {
         let inner = block.inner(area);
         block.render(area, surface);
 
-        self.height = inner.height as usize;
+        let list = if self.prompt.is_some() {
+            inner.clip_bottom(1)
+        } else {
+            inner
+        };
+
+        self.height = list.height as usize;
         self.scroll_to_selection();
 
         for (index, entry) in self
@@ -183,18 +307,18 @@ impl Component for FileTree {
                 (name.into_owned(), text_style)
             };
 
-            let x = inner.x + indent as u16;
-            let y = inner.y + row as u16;
-            let width = inner.width.saturating_sub(indent as u16) as usize;
+            let x = list.x + indent as u16;
+            let y = list.y + row as u16;
+            let width = list.width.saturating_sub(indent as u16) as usize;
 
             if index == self.tree.selected() {
                 // Paint the whole row first so the highlight reads as a bar,
                 // then let the text inherit that background.
                 surface.set_style(
                     Rect {
-                        x: inner.x,
+                        x: list.x,
                         y,
-                        width: inner.width,
+                        width: list.width,
                         height: 1,
                     },
                     selected_style,
@@ -211,9 +335,17 @@ impl Component for FileTree {
                 style,
             );
         }
+
+        if let Some((_, prompt)) = &mut self.prompt {
+            prompt.render(prompt_row(inner), surface, cx);
+        }
     }
 
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
+        if self.prompt.is_some() {
+            return self.handle_prompt_event(event, cx);
+        }
+
         let Event::Key(key) = event else {
             return EventResult::Ignored(None);
         };
@@ -232,6 +364,8 @@ impl Component for FileTree {
             key!(PageUp) | ctrl!('u') => self.tree.select_by(-self.page()),
             key!('l') | key!(Enter) | key!(Right) => return self.activate(cx),
             key!('h') | key!(Left) => self.collapse_or_leave(),
+            key!('a') => self.ask(Pending::CreateFile),
+            shift!('A') => self.ask(Pending::CreateDirectory),
             // Modal: swallow everything else rather than let it reach the
             // buffer underneath.
             _ => {}
@@ -242,12 +376,27 @@ impl Component for FileTree {
 
     /// Answering here keeps the editor's cursor from showing through; the
     /// compositor stops at the first layer that returns `Some`.
-    fn cursor(&self, _area: Rect, _editor: &Editor) -> (Option<Position>, CursorKind) {
+    fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        if let Some((_, prompt)) = &self.prompt {
+            // Show where typing lands, rather than the hidden cursor below.
+            return prompt.cursor(prompt_row(Block::bordered().inner(area)), editor);
+        }
+
         (Some(Position::default()), CursorKind::Hidden)
     }
 
     fn id(&self) -> Option<&'static str> {
         Some(Self::ID)
+    }
+}
+
+/// The bottom row of the tree's inner area, where the prompt is drawn.
+fn prompt_row(inner: Rect) -> Rect {
+    Rect {
+        x: inner.x,
+        y: inner.y + inner.height.saturating_sub(1),
+        width: inner.width,
+        height: 1,
     }
 }
 
@@ -265,12 +414,16 @@ pub fn open(cx: &mut Context, _args: Args, event: PromptEvent) -> anyhow::Result
         anyhow::bail!("workspace directory does not exist");
     }
 
-    let tree = FileTree::new(root, cx.editor)?;
-
+    // The tree is built inside the callback rather than out here: it owns a
+    // `Prompt`, which is not `Send`, so it cannot cross the job boundary. The
+    // upside is that the directory is read at the moment the layer opens.
     cx.jobs.callback(async move {
         let call: job::Callback = job::Callback::EditorCompositor(Box::new(
-            move |_editor, compositor: &mut Compositor| {
-                compositor.push(Box::new(overlaid(tree)));
+            move |editor: &mut Editor, compositor: &mut Compositor| match FileTree::new(
+                root, editor,
+            ) {
+                Ok(tree) => compositor.push(Box::new(overlaid(tree))),
+                Err(err) => editor.set_error(format!("Failed to open file tree: {err}")),
             },
         ));
         Ok(call)
