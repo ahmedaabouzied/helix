@@ -412,6 +412,16 @@ impl FileTree {
         }
     }
 
+    /// Shows the preview pane, or hides it if it is already up. Where it goes
+    /// is the config's business — `C-s` and `C-v` are there for saying
+    /// otherwise in the moment.
+    fn toggle_preview(&mut self, editor: &Editor) {
+        self.preview = match self.preview {
+            Some(_) => None,
+            None => Some(editor.config().file_tree_preview),
+        };
+    }
+
     /// Drags the viewport just far enough to keep the cursor on screen.
     fn scroll_to_selection(&mut self) {
         if self.height == 0 {
@@ -668,6 +678,10 @@ impl Component for FileTree {
             key!(PageUp) | ctrl!('u') => self.tree.select_by(-self.page()),
             key!('o') | key!('l') | key!(Enter) | key!(Right) => return self.activate(cx),
             key!('h') | key!(Left) => self.collapse_or_leave(),
+            key!('s') => self.toggle_preview(cx.editor),
+            // Mirrors the pickers, where `C-s` splits below and `C-v` beside.
+            ctrl!('s') => self.preview = Some(PreviewLayout::Bottom),
+            ctrl!('v') => self.preview = Some(PreviewLayout::Right),
             key!('a') => self.ask(Pending::CreateFile, cx.editor),
             shift!('A') => self.ask(Pending::CreateDirectory, cx.editor),
             key!('r') => self.ask_rename(cx.editor),
