@@ -434,10 +434,12 @@ pub struct Config {
     pub buffer_picker: BufferPickerConfig,
     /// Workspace-trust configuration.
     pub workspace_trust: WorkspaceTrustConfig,
-    // ====== fork: picker preview layout (begin) ======
+    // ====== fork: preview layouts (begin) ======
     /// Where the picker draws its preview: `right` (default) or `bottom`.
     pub picker_preview: crate::fork::preview_layout::PreviewLayout,
-    // ====== fork: picker preview layout (end) ======
+    /// Where the file tree draws its preview: `bottom` (default) or `right`.
+    pub file_tree_preview: crate::fork::preview_layout::PreviewLayout,
+    // ====== fork: preview layouts (end) ======
 }
 
 /// User-facing configuration for `[editor.workspace-trust]`.
@@ -1249,8 +1251,11 @@ impl Default for Config {
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
             workspace_trust: WorkspaceTrustConfig::default(),
-            // fork: picker preview layout
+            // fork: preview layouts
             picker_preview: Default::default(),
+            // The tree's rows are short, so stacking keeps the preview at full
+            // width while costing the list nothing it was using.
+            file_tree_preview: crate::fork::preview_layout::PreviewLayout::Bottom,
         }
     }
 }
