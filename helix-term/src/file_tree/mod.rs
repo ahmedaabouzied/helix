@@ -88,9 +88,19 @@ impl FileTree {
         // `file_explorer.hidden` reads as "hide hidden files", so it inverts.
         let show_hidden = !editor.config().file_explorer.hidden;
         let children = model::read_dir(&root, show_hidden)?;
+        let mut tree = Tree::new(root, children);
+
+        // Open onto the file being edited rather than at the root, so the tree
+        // starts where the reader already is. A scratch buffer, or a file from
+        // outside the workspace, leaves it shut.
+        if let Some(path) = doc!(editor).path() {
+            tree.reveal(path, |directory| {
+                model::read_dir(directory, show_hidden).ok()
+            });
+        }
 
         Ok(Self {
-            tree: Tree::new(root, children),
+            tree,
             offset: 0,
             height: 0,
             show_hidden,
