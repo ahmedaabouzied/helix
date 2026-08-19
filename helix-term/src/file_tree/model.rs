@@ -229,6 +229,49 @@ impl Tree {
     pub fn position(&self, path: &Path) -> Option<usize> {
         self.entries.iter().position(|entry| entry.path == path)
     }
+
+    /// Opens every directory between the root and `path`, then puts the cursor
+    /// on it. Directories already open are left alone, so nothing that was
+    /// showing disappears.
+    ///
+    /// `read` lists one directory's children; the filesystem stays out of the
+    /// model. A `None` from it — an unreadable directory — stops the walk, as
+    /// does a path outside the root or one with no row of its own, leaving the
+    /// tree open as far as it got.
+    pub fn reveal(
+        &mut self,
+        path: &Path,
+        mut read: impl FnMut(&Path) -> Option<Vec<(PathBuf, bool)>>,
+    ) {
+        let Ok(relative) = path.strip_prefix(&self.root) else {
+            return;
+        };
+
+        let last = relative.components().count().saturating_sub(1);
+        let mut current = self.root.clone();
+
+        for (step, component) in relative.components().enumerate() {
+            current.push(component);
+
+            let Some(index) = self.position(&current) else {
+                return;
+            };
+
+            // The target itself is only selected, never opened: revealing a
+            // directory should not also spill its contents.
+            if step == last {
+                self.select(index);
+                return;
+            }
+
+            if !self.entries[index].expanded {
+                let Some(children) = read(&current) else {
+                    return;
+                };
+                self.expand(index, children);
+            }
+        }
+    }
 }
 
 /// Reads the immediate children of `path`, ordered for display: directories
@@ -397,6 +440,95 @@ mod tests {
 
         tree.collapse(0);
         assert_eq!(tree.position(Path::new("main.rs")), None);
+    }
+
+    /// Stands in for the filesystem: the listing each directory would return.
+    fn listing(directory: &Path) -> Option<Vec<(PathBuf, bool)>> {
+        match directory.to_string_lossy().as_ref() {
+            "/root/src" => Some(vec![dir("/root/src/ui"), file("/root/src/main.rs")]),
+            "/root/src/ui" => Some(vec![file("/root/src/ui/menu.rs")]),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn reveal_opens_the_directories_on_the_way_to_a_file() {
+        let mut tree = Tree::new(
+            PathBuf::from("/root"),
+            vec![dir("/root/src"), file("/root/a.rs")],
+        );
+
+        tree.reveal(Path::new("/root/src/ui/menu.rs"), listing);
+
+        assert_eq!(
+            shape(&tree),
+            [
+                ("src".into(), 0),
+                ("ui".into(), 1),
+                ("menu.rs".into(), 2),
+                ("main.rs".into(), 1),
+                ("a.rs".into(), 0),
+            ],
+            "both directories above the file are open"
+        );
+        assert_eq!(tree.selected_entry().unwrap().name(), "menu.rs");
+    }
+
+    #[test]
+    fn reveal_selects_a_directory_without_opening_it() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("/root/src")]);
+
+        tree.reveal(Path::new("/root/src/ui"), listing);
+
+        assert_eq!(
+            shape(&tree),
+            [("src".into(), 0), ("ui".into(), 1), ("main.rs".into(), 1)],
+            "`src` opened to show `ui`, but `ui` itself stayed shut"
+        );
+        assert_eq!(tree.selected_entry().unwrap().name(), "ui");
+    }
+
+    #[test]
+    fn reveal_leaves_directories_that_are_already_open_alone() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("/root/src")]);
+        tree.expand(0, vec![dir("/root/src/ui"), file("/root/src/main.rs")]);
+
+        tree.reveal(Path::new("/root/src/main.rs"), |_| {
+            panic!("an open directory should not be read again")
+        });
+
+        assert_eq!(tree.selected_entry().unwrap().name(), "main.rs");
+    }
+
+    #[test]
+    fn reveal_stops_where_it_runs_out_of_rows() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("/root/src")]);
+
+        // Nothing lists `/root/src/ui/deep`, so the walk gets as far as `ui`.
+        tree.reveal(Path::new("/root/src/ui/deep/menu.rs"), listing);
+
+        assert_eq!(
+            shape(&tree),
+            [
+                ("src".into(), 0),
+                ("ui".into(), 1),
+                ("menu.rs".into(), 2),
+                ("main.rs".into(), 1),
+            ],
+            "the readable part of the path opened; the rest is simply missing"
+        );
+        assert_eq!(tree.selected(), 0, "the cursor never moved");
+    }
+
+    #[test]
+    fn revealing_the_root_or_a_path_outside_it_does_nothing() {
+        let mut tree = Tree::new(PathBuf::from("/root"), vec![dir("/root/src")]);
+
+        tree.reveal(Path::new("/elsewhere/main.rs"), listing);
+        tree.reveal(Path::new("/root"), listing);
+
+        assert_eq!(shape(&tree), [("src".into(), 0)]);
+        assert_eq!(tree.selected(), 0);
     }
 
     #[test]
