@@ -125,6 +125,11 @@ cursor from the list. `MIN_WIDTH` in the fork module duplicates the value of
 `:file-tree` (aliased `:tree`) opens a modal file tree over the editor, in the
 manner of a picker.
 
+It opens expanded to the file being edited, cursor on its row — the directories
+between the workspace root and that file are read on the way in, and any that
+were already open stay as they were. A scratch buffer, or a file from outside
+the workspace, opens the tree shut at the root instead.
+
 No default binding ships with it, which is what keeps `keymap/default.rs`
 untouched. Bind it in `config.toml` instead — user keymaps merge into the
 built-in ones node by node, so this extends the space menu rather than
