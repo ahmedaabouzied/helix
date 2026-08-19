@@ -9,6 +9,7 @@
 //! repository root for the upstream files this touches.
 
 pub mod model;
+pub mod preview;
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,7 @@ use crate::{
 };
 
 use model::Tree;
+use preview::Previews;
 
 /// Columns of indentation per nesting level.
 const INDENT: usize = 2;
@@ -59,6 +61,9 @@ pub struct FileTree {
     prompt: Option<(Pending, Prompt)>,
     /// A destructive action waiting on a yes.
     confirm: Option<Confirm>,
+    /// Files already read for the preview pane. Filled as the cursor moves,
+    /// and thrown away with the tree.
+    previews: Previews,
 }
 
 /// A pending deletion. Held rather than acted on immediately so the question
@@ -106,6 +111,7 @@ impl FileTree {
             show_hidden,
             prompt: None,
             confirm: None,
+            previews: Previews::new(),
         })
     }
 }
