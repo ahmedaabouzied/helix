@@ -230,7 +230,11 @@ impl AsyncHook for HighlightHandler {
     type Event = Arc<Path>;
 
     fn handle_event(&mut self, path: Self::Event, timeout: Option<Instant>) -> Option<Instant> {
-        if self.trigger.as_ref().is_some_and(|trigger| *trigger == path) {
+        if self
+            .trigger
+            .as_ref()
+            .is_some_and(|trigger| *trigger == path)
+        {
             // Still the same row: let the wait run down rather than restarting
             // it, or a repeating render would hold the parse off forever.
             timeout

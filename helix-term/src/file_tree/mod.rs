@@ -13,11 +13,12 @@ pub mod preview;
 
 use std::path::{Path, PathBuf};
 
-use helix_core::{command_line::Args, Position};
+use helix_core::{command_line::Args, text_annotations::TextAnnotations, Position};
 use helix_view::{
     editor::Action,
-    fork::icons,
-    graphics::{CursorKind, Rect},
+    fork::{icons, preview_layout::PreviewLayout},
+    graphics::{CursorKind, Margin, Rect},
+    view::ViewPosition,
     Editor,
 };
 use tui::{
@@ -28,7 +29,10 @@ use tui::{
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
     ctrl, job, key, shift,
-    ui::{completers, overlay::overlaid, Prompt, PromptEvent},
+    ui::{
+        completers, document::render_document, overlay::overlaid,
+        text_decorations::DecorationManager, EditorView, Prompt, PromptEvent,
+    },
 };
 
 use model::Tree;
@@ -64,6 +68,10 @@ pub struct FileTree {
     /// Files already read for the preview pane. Filled as the cursor moves,
     /// and thrown away with the tree.
     previews: Previews,
+    /// Where the preview pane sits, or `None` while it is hidden — which is how
+    /// the tree opens, so a reader who never asks for a preview keeps every row
+    /// the screen can hold.
+    preview: Option<PreviewLayout>,
 }
 
 /// A pending deletion. Held rather than acted on immediately so the question
@@ -112,6 +120,7 @@ impl FileTree {
             prompt: None,
             confirm: None,
             previews: Previews::new(),
+            preview: None,
         })
     }
 }
@@ -422,8 +431,10 @@ impl FileTree {
     }
 }
 
-impl Component for FileTree {
-    fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+impl FileTree {
+    /// Draws the rows, the border, and whichever of the prompt or the
+    /// confirmation is open.
+    fn render_list(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         let theme = &cx.editor.theme;
         let text_style = theme.get("ui.text");
         let directory_style = theme.get("ui.text.directory");
@@ -531,6 +542,102 @@ impl Component for FileTree {
 
         if let Some((_, prompt)) = &mut self.prompt {
             prompt.render(prompt_row(inner), surface, cx);
+        }
+    }
+
+    /// Draws the selected file's contents beside or under the list.
+    ///
+    /// Highlighting arrives a frame or two late — the parse is debounced onto a
+    /// background task — so the first look at a file is plain text.
+    fn render_preview(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        surface.clear_with(area, cx.editor.theme.get("ui.background"));
+
+        let block = Block::bordered();
+        // A column of air on each side, so text never touches the border.
+        let inner = block.inner(area).inner(Margin::horizontal(1));
+        block.render(area, surface);
+
+        let Some(entry) = self.tree.selected_entry() else {
+            return;
+        };
+        // Cloned to let go of the tree before the cache is borrowed.
+        let path = entry.path.clone();
+
+        let preview = self.previews.get(&path, cx.editor);
+        let Some(doc) = preview.document() else {
+            if let Some(message) = preview.placeholder() {
+                let x = inner.x + inner.width.saturating_sub(message.len() as u16) / 2;
+                let y = inner.y + inner.height / 2;
+                surface.set_stringn(
+                    x,
+                    y,
+                    message,
+                    inner.width as usize,
+                    cx.editor.theme.get("ui.text"),
+                );
+            }
+            return;
+        };
+
+        // Always from the top of the file: the tree picks a file, not a line,
+        // so there is nothing to scroll to.
+        let offset = ViewPosition::default();
+        let loader = cx.editor.syn_loader.load();
+        let config = cx.editor.config();
+
+        let syntax_highlighter =
+            EditorView::doc_syntax_highlighter(doc, offset.anchor, area.height, &loader);
+
+        let mut overlay_highlights = Vec::new();
+        if doc
+            .language_config()
+            .and_then(|config| config.rainbow_brackets)
+            .unwrap_or(config.rainbow_brackets)
+        {
+            if let Some(overlay) = EditorView::doc_rainbow_highlights(
+                doc,
+                offset.anchor,
+                area.height,
+                &cx.editor.theme,
+                &loader,
+            ) {
+                overlay_highlights.push(overlay);
+            }
+        }
+        EditorView::doc_diagnostics_highlights_into(doc, &cx.editor.theme, &mut overlay_highlights);
+
+        render_document(
+            surface,
+            inner,
+            doc,
+            offset,
+            &TextAnnotations::default(),
+            syntax_highlighter,
+            overlay_highlights,
+            &cx.editor.theme,
+            DecorationManager::default(),
+        );
+    }
+}
+
+impl Component for FileTree {
+    fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        // +------------+ +------------+      +---------------------+
+        // |tree        | |preview     |      |tree                 |
+        // |            | |            |      +---------------------+
+        // |            | |            |      |preview              |
+        // +------------+ +------------+      +---------------------+
+        //   editor.file-tree-preview            editor.file-tree-preview
+        //          = "right"                            = "bottom"
+        let (list, preview) = match self.preview {
+            Some(layout) => layout.split(area),
+            None => (area, None),
+        };
+
+        self.render_list(list, surface, cx);
+
+        if let Some(preview) = preview {
+            self.render_preview(preview, surface, cx);
         }
     }
 
