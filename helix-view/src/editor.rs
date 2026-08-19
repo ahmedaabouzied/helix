@@ -436,7 +436,7 @@ pub struct Config {
     pub workspace_trust: WorkspaceTrustConfig,
     // ====== fork: picker preview layout (begin) ======
     /// Where the picker draws its preview: `right` (default) or `bottom`.
-    pub picker_preview: crate::fork::picker_preview::PickerPreview,
+    pub picker_preview: crate::fork::preview_layout::PreviewLayout,
     // ====== fork: picker preview layout (end) ======
 }
 

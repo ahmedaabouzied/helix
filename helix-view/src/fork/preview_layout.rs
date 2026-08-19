@@ -1,4 +1,4 @@
-//! Where the picker draws its preview.
+//! Where a list draws its preview — shared by the picker and the file tree.
 //!
 //! Upstream always puts the preview beside the list, which halves the width a
 //! second time when Helix is itself already in a vertical split — the list and
@@ -17,15 +17,15 @@ const MIN_HEIGHT: u16 = 20;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum PickerPreview {
-    /// Beside the list. Upstream's layout, and the default.
+pub enum PreviewLayout {
+    /// Beside the list. Upstream's layout for the picker.
     #[default]
     Right,
     /// Under the list.
     Bottom,
 }
 
-impl PickerPreview {
+impl PreviewLayout {
     /// Divides `area` into the list area and, where there is room for one, the
     /// preview area.
     pub fn split(self, area: Rect) -> (Rect, Option<Rect>) {
@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn right_splits_the_width() {
-        let (list, preview) = PickerPreview::Right.split(AREA);
+        let (list, preview) = PreviewLayout::Right.split(AREA);
         let preview = preview.unwrap();
         assert_eq!((list.width, list.height), (50, 40));
         assert_eq!((preview.x, preview.width, preview.height), (50, 50, 40));
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn bottom_splits_the_height() {
-        let (list, preview) = PickerPreview::Bottom.split(AREA);
+        let (list, preview) = PreviewLayout::Bottom.split(AREA);
         let preview = preview.unwrap();
         assert_eq!((list.width, list.height), (100, 20));
         assert_eq!((preview.y, preview.width, preview.height), (20, 100, 20));
@@ -78,13 +78,13 @@ mod tests {
             width: MIN_WIDTH,
             ..AREA
         };
-        assert_eq!(PickerPreview::Right.split(narrow), (narrow, None));
+        assert_eq!(PreviewLayout::Right.split(narrow), (narrow, None));
 
         let short = Rect {
             height: MIN_HEIGHT,
             ..AREA
         };
-        assert_eq!(PickerPreview::Bottom.split(short), (short, None));
+        assert_eq!(PreviewLayout::Bottom.split(short), (short, None));
     }
 
     #[test]
@@ -92,9 +92,9 @@ mod tests {
         // A short-but-wide area still gets a side-by-side preview, and a
         // narrow-but-tall one still gets a stacked preview.
         let short = Rect { height: 4, ..AREA };
-        assert!(PickerPreview::Right.split(short).1.is_some());
+        assert!(PreviewLayout::Right.split(short).1.is_some());
 
         let narrow = Rect { width: 20, ..AREA };
-        assert!(PickerPreview::Bottom.split(narrow).1.is_some());
+        assert!(PreviewLayout::Bottom.split(narrow).1.is_some());
     }
 }

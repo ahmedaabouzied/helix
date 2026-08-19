@@ -4,4 +4,4 @@
 //! upstream stays cheap — see FORK.md at the repository root.
 
 pub mod icons;
-pub mod picker_preview;
+pub mod preview_layout;

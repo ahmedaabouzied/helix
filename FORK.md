@@ -105,7 +105,7 @@ Owned files:
 | File | Contents |
 | --- | --- |
 | `helix-view/src/fork/mod.rs` | fork-local additions to `helix-view` |
-| `helix-view/src/fork/picker_preview.rs` | the `PickerPreview` enum, the split, and its tests |
+| `helix-view/src/fork/preview_layout.rs` | the `PreviewLayout` enum, the split, and its tests |
 
 Upstream files touched:
 
