@@ -88,12 +88,15 @@ the baked one *and* is shared with every other Helix on the machine, so an older
 `hx` would pick up this fork's grammars and fail to load them across the
 tree-sitter ABI gap.
 
-### Picker preview layout
+### Preview layout
 
 `editor.picker-preview` chooses where the picker draws its preview: `right`
 (upstream's layout, the default) or `bottom`. Upstream always splits left/right,
 which halves the width a second time when Helix is itself in a vertical split —
 list and preview each end up a quarter of the screen wide.
+
+The same `PreviewLayout` divides the [file tree](#file-tree) below, under its
+own `editor.file-tree-preview`.
 
 ```toml
 [editor]
@@ -112,7 +115,7 @@ Upstream files touched:
 | File | Change |
 | --- | --- |
 | `helix-view/src/lib.rs` | `pub mod fork;` |
-| `helix-view/src/editor.rs` | one `Config` field and its default |
+| `helix-view/src/editor.rs` | two `Config` fields and their defaults, in one marked block |
 | `helix-term/src/ui/picker.rs` | a `layout` helper, called from `render` and `cursor` |
 
 `render` and `cursor` previously carried the same layout arithmetic twice;
@@ -140,6 +143,20 @@ replacing it:
 t = ":file-tree"
 ```
 
+`s` shows the selected file beside or under the list, whichever
+`editor.file-tree-preview` asks for, and hides it again. The pane starts hidden,
+so a reader who never asks for one keeps every row the screen can hold.
+
+```toml
+[editor]
+file-tree-preview = "bottom"   # the default here; "right" to sit beside the list
+```
+
+It defaults to `bottom` where the picker defaults to `right`: the tree's rows are
+short, so stacking costs the list nothing it was using and leaves the preview the
+full width. `C-s` and `C-v` override the setting for the moment, in the same
+sense as the pickers' own split keys.
+
 `o` and `l` both open, the first for NERDTree muscle memory and the second to
 pair with `h` for walking in and out, as ranger and lf do.
 
@@ -153,6 +170,8 @@ pair with `h` for walking in and out, as ranger and lf do.
 | `a` `A` | create file, create directory |
 | `r` | rename |
 | `d` | delete, confirmed with `y` |
+| `s` | show or hide the preview pane |
+| `C-s` `C-v` | preview under the list, preview beside it |
 | `Esc` `C-c` | close |
 
 Modal rather than a sidebar on purpose. A permanent pane costs width in every
@@ -166,6 +185,7 @@ Owned files:
 | --- | --- |
 | `helix-term/src/file_tree/model.rs` | rows, expansion, selection, and the directory read; unit tested |
 | `helix-term/src/file_tree/mod.rs` | the `Component`, its keys, and the file operations |
+| `helix-term/src/file_tree/preview.rs` | reading, caching and highlighting the previewed file |
 
 Rows are drawn as `indent | marker | icon | name`; the icons come from
 [File-type icons](#file-type-icons) below.
@@ -176,6 +196,7 @@ Upstream files touched:
 | --- | --- |
 | `helix-term/src/lib.rs` | `pub mod file_tree;` |
 | `helix-term/src/commands/typed.rs` | one `TYPABLE_COMMAND_LIST` entry, appended at the end |
+| `helix-term/src/ui/mod.rs` | `document` and `text_decorations` widened to `pub(crate) mod` |
 
 The command entry sits at the *end* of the list rather than in name order: a
 neighbouring upstream edit would otherwise collide with the fork block, whereas
@@ -183,7 +204,7 @@ at the end the only conflicts are upstream's own appends, which resolve as "keep
 both". `fun` points at `crate::file_tree::open`, so no fork logic lives in
 `typed.rs`.
 
-Two things worth knowing before changing this code:
+Three things worth knowing before changing this code:
 
 - **Rows are stored flattened in display order**, not as a nested tree.
   Expanding splices children in behind their parent; collapsing drains the run
@@ -195,6 +216,15 @@ Two things worth knowing before changing this code:
   notification, which is how a language server updates imports across the
   workspace when a file is renamed. Note `create_path` writes with `fs::write`
   and would truncate an existing file, so creation checks for one first.
+- **The preview copies the picker rather than sharing it.** `Document::open`,
+  the size limit and the binary sniff are shared, but the cache and the
+  highlight handler are not: the picker's cache is a field of `Picker<T, D>`,
+  and its handler finds that cache with
+  `compositor.find::<Overlay<Picker<T, D>>>()` — the picker is named in the
+  type, so it cannot be pointed at a tree. Both copies must stay in step with
+  `MAX_FILE_SIZE_FOR_PREVIEW` and with whatever `EditorView::doc_*` expects.
+  Cached previews are dropped with the tree, and `Previews::forget` clears a
+  path and everything under it whenever the tree itself changes one.
 
 The root has no row of its own, so creating or deleting directly inside it
 rebuilds the listing and collapses everything. Giving the root a row would fix

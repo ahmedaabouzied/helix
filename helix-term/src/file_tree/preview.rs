@@ -319,7 +319,9 @@ mod tests {
             "/root/srcfile.rs",
             "/root/a.rs",
         ] {
-            previews.entries.insert(Path::new(path).into(), Cached::Binary);
+            previews
+                .entries
+                .insert(Path::new(path).into(), Cached::Binary);
         }
 
         previews.forget(Path::new("/root/src"));
