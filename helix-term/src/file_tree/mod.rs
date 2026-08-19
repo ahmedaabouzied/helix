@@ -270,6 +270,8 @@ impl FileTree {
             return;
         }
 
+        // A preview read before the change must not outlive it.
+        self.previews.forget(&path);
         self.refresh(index, &directory, cx);
 
         if let Some(index) = self.tree.position(&path) {
@@ -304,6 +306,9 @@ impl FileTree {
                 .set_error(format!("Failed to rename {}: {err}", from.display()));
             return;
         }
+
+        self.previews.forget(from);
+        self.previews.forget(&to);
 
         // Re-read from the row the entry lived under, which is unchanged: a
         // rename cannot move something out of its own directory unless the new
@@ -340,6 +345,7 @@ impl FileTree {
             return;
         }
 
+        self.previews.forget(path);
         self.refresh(index, &directory, cx);
     }
 

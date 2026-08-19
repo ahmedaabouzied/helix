@@ -131,10 +131,13 @@ impl Previews {
         Preview::Cached(cached)
     }
 
-    /// Forgets what was read for `path`, so the next look goes back to disk.
-    /// The tree's own create, rename and delete all invalidate a preview.
+    /// Forgets what was read for `path`, and for anything under it, so the
+    /// next look goes back to disk. The tree's own create, rename and delete
+    /// all invalidate a preview; a directory takes its contents with it.
     pub fn forget(&mut self, path: &Path) {
-        self.entries.remove(path);
+        // `starts_with` compares whole components, so forgetting `src` leaves
+        // a `srcfile.rs` beside it alone.
+        self.entries.retain(|cached, _| !cached.starts_with(path));
     }
 
     fn read(&mut self, path: &Path, editor: &Editor) -> Cached {
@@ -305,6 +308,34 @@ mod tests {
         let kind = classify(path, &mut buffer);
         assert!(buffer.is_empty(), "the scratch buffer is handed back empty");
         kind
+    }
+
+    #[test]
+    fn forgetting_a_directory_forgets_what_was_under_it() {
+        let mut previews = Previews::new();
+        for path in [
+            "/root/src/main.rs",
+            "/root/src/ui/menu.rs",
+            "/root/srcfile.rs",
+            "/root/a.rs",
+        ] {
+            previews.entries.insert(Path::new(path).into(), Cached::Binary);
+        }
+
+        previews.forget(Path::new("/root/src"));
+
+        let mut left: Vec<_> = previews
+            .entries
+            .keys()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+
+        assert_eq!(
+            left,
+            ["/root/a.rs", "/root/srcfile.rs"],
+            "the directory's contents went with it, and only its contents"
+        );
     }
 
     #[test]
