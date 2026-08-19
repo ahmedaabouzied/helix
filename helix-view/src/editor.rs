@@ -808,6 +808,11 @@ pub enum StatusLineElement {
 
     /// Indicator for when code actions are available
     CodeActionHint,
+
+    // ====== fork: statusline file icon (begin) ======
+    /// The file-type icon for the open document
+    FileIcon,
+    // ====== fork: statusline file icon (end) ======
 }
 
 // Cursor shape is read and used on every rendered frame and so needs

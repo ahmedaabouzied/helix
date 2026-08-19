@@ -65,6 +65,14 @@ pub fn for_file(path: &Path) -> Icon {
         .unwrap_or(FILE)
 }
 
+/// The icon for a document, which may be a scratch buffer with no path yet.
+///
+/// Exists so callers that hold an `Option<&Path>` — the statusline does — carry
+/// no icon logic of their own.
+pub fn for_document(path: Option<&Path>) -> Icon {
+    path.map_or(FILE, for_file)
+}
+
 pub fn for_directory(expanded: bool) -> Icon {
     if expanded {
         DIRECTORY_OPEN
@@ -856,6 +864,15 @@ mod tests {
     #[test]
     fn extension_case_is_folded_as_a_second_try() {
         assert_eq!(for_file(Path::new("A.RS")), for_file(Path::new("a.rs")));
+    }
+
+    #[test]
+    fn a_document_without_a_path_gets_the_fallback() {
+        assert_eq!(for_document(None), FILE);
+        assert_eq!(
+            for_document(Some(Path::new("main.rs"))),
+            for_file(Path::new("main.rs"))
+        );
     }
 
     #[test]

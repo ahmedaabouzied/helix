@@ -158,6 +158,8 @@ where
         helix_view::editor::StatusLineElement::Register => render_register,
         helix_view::editor::StatusLineElement::CurrentWorkingDirectory => render_cwd,
         helix_view::editor::StatusLineElement::CodeActionHint => render_code_action_hint,
+        // fork: statusline file icon
+        helix_view::editor::StatusLineElement::FileIcon => render_file_icon,
     }
 }
 
@@ -593,3 +595,19 @@ where
         write(context, " ⋮ ".into())
     }
 }
+
+// ====== fork: statusline file icon (begin) ======
+/// Glue only: which glyph and which colour are decided in
+/// `helix_view::fork::icons`, so this has no reason to change.
+fn render_file_icon<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let icon = helix_view::fork::icons::for_document(context.doc.path());
+
+    write(
+        context,
+        Span::styled(format!(" {} ", icon.glyph), Style::default().fg(icon.color)),
+    );
+}
+// ====== fork: statusline file icon (end) ======
