@@ -400,7 +400,7 @@ impl Component for Welcome {
                 Some(action) => Self::activate(action),
                 None => Self::dismiss(),
             },
-            _ => Self::dismiss(),
+            _ => EventResult::Consumed(None),
         }
     }
 
