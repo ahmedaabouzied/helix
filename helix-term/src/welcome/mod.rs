@@ -175,12 +175,24 @@ fn workspace_root(cx: &mut Context) -> Option<PathBuf> {
 
 /// The welcome screen layer for this invocation, if there should be one.
 ///
-/// Only a bare `hx` qualifies: files on the command line, `--tutor`, or piped
-/// stdin all mean the user already said what they want to look at. Integration
-/// tests drive the compositor directly, so keep the layer out of their way too.
-pub fn layer(args: &Args) -> Option<Box<dyn Component>> {
+/// A bare `hx` qualifies, and so does a lone directory like `hx .`: naming a
+/// directory asks for a place to start, which is what this screen is for. Named
+/// files, `--tutor`, or piped stdin all mean the user already said what they
+/// want to look at. Integration tests drive the compositor directly, so keep the
+/// layer out of their way too.
+///
+/// A directory argument is dropped once we decide to show the screen. `main`
+/// has already made it the working directory by this point, and dropping it
+/// stops `Application::new` from stacking its own file picker on top of us --
+/// the menu offers "Find file" already.
+pub fn layer(args: &mut Args) -> Option<Box<dyn Component>> {
+    // Paths are canonicalized during parsing, so the `.` the user typed is long
+    // gone by now. Ask the filesystem what the argument turned out to be.
+    let lone_directory =
+        args.files.len() == 1 && args.files.keys().next().is_some_and(|path| path.is_dir());
+
     let wanted = !cfg!(feature = "integration")
-        && args.files.is_empty()
+        && (args.files.is_empty() || lone_directory)
         && !args.load_tutor
         && stdin().is_terminal();
 
@@ -192,6 +204,8 @@ pub fn layer(args: &Args) -> Option<Box<dyn Component>> {
     if !config.enable {
         return None;
     }
+
+    args.files.clear();
 
     Some(Box::new(Welcome::new(config)))
 }

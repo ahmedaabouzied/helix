@@ -142,7 +142,11 @@ impl Application {
         let jobs = Jobs::new();
 
         // ====== fork: welcome screen (begin) ======
-        if let Some(layer) = crate::welcome::layer(&args) {
+        // Shadowed rather than taking `mut args` in the signature, so the fork
+        // stays inside these sentinels. `layer` clears a directory argument it
+        // consumes, which keeps the file picker below from also opening.
+        let mut args = args;
+        if let Some(layer) = crate::welcome::layer(&mut args) {
             compositor.push(layer);
         }
         // ====== fork: welcome screen (end) ======
